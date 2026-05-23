@@ -48,11 +48,18 @@ async def fetch_rating(
 
     try:
         logger.info(f"External API Call: Requested ratings+keywords from MDBlist for {imdb_id}")
-        resp = await client.get(
+        import upstream
+        resp = await upstream.request(
+            client, "GET",
             f"https://api.mdblist.com/imdb/{mdb_type}/{imdb_id}",
+            service=upstream.SVC_MDBLIST,
+            raise_for_status=False,
             params={"apikey": mdblist_key, "append_to_response": "keyword"},
             timeout=5.0,
         )
+    except upstream.CircuitOpenError:
+        logger.warning(f"MDblist circuit open — skipping rating fetch for {imdb_id}")
+        return FETCH_FAILED
     except Exception as exc:
         logger.error(f"MDblist request error for {imdb_id}: {type(exc).__name__}: {exc}")
         return FETCH_FAILED
