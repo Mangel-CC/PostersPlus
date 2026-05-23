@@ -19,6 +19,7 @@ import httpx
 
 from cache import add_digital_releases
 from config import DIGITAL_RELEASE_MAX_AGE_DAYS, DIGITAL_RELEASE_MIN_AGE_DAYS
+import coordination as coord
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +103,40 @@ async def sync_digital_releases(client: httpx.AsyncClient) -> int:
 
 
 async def digital_release_poll_loop(client: httpx.AsyncClient) -> None:
-    """Background task: initial sync shortly after startup, then every 24 h."""
+    """Background task: initial sync shortly after startup, then every 24 h.
+
+    Leader-elected via the coordination layer so multi-replica deployments
+    only have one replica polling r/movieleaks. With the default in-process
+    coordinator each worker leads its own iteration (matches upstream).
+    """
+    lease_ttl = float(_POLL_INTERVAL + 3600)  # one polling cycle + headroom
+    lease_token: str | None = None
+
     await asyncio.sleep(60)   # let the service finish warming up first
-    while True:
-        try:
-            await sync_digital_releases(client)
-        except Exception as exc:
-            logger.error(f"Digital release poll loop error: {exc}")
-        await asyncio.sleep(_POLL_INTERVAL)
+    try:
+        while True:
+            if lease_token is None:
+                lease_token = await coord.try_acquire_lease(
+                    coord.LEASE_DIGITAL_RELEASE, lease_ttl,
+                )
+                if lease_token is not None:
+                    logger.info("Acquired digital-release-poll lease")
+            else:
+                if not await coord.refresh_lease(
+                    coord.LEASE_DIGITAL_RELEASE, lease_token, lease_ttl,
+                ):
+                    logger.info("Digital-release-poll lease lost")
+                    lease_token = None
+
+            if lease_token is not None:
+                try:
+                    await sync_digital_releases(client)
+                except Exception as exc:
+                    logger.error(f"Digital release poll loop error: {exc}")
+            else:
+                logger.debug("Digital release poll skipped — another replica holds the lease")
+
+            await asyncio.sleep(_POLL_INTERVAL)
+    finally:
+        if lease_token is not None:
+            await coord.release_lease(coord.LEASE_DIGITAL_RELEASE, lease_token)

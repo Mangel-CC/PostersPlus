@@ -137,6 +137,77 @@ async def release_inflight(namespace: str, key: str) -> None:
         logger.warning("Redis release_inflight error: %s", exc)
 
 
+# ---------------------------------------------------------------------------
+# Named leases — Phase 5 leader election. Survives single-replica restart
+# via TTL; only the current token-holder can refresh or release the lease
+# (compare-and-set via Lua) so a slow replica can't blast through a faster
+# one's lock.
+# ---------------------------------------------------------------------------
+
+_LEASE_NS = "lease"
+
+_LUA_REFRESH = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+else
+    return 0
+end
+"""
+
+_LUA_RELEASE = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+else
+    return 0
+end
+"""
+
+
+async def try_acquire_lease(name: str, ttl_seconds: float) -> str | None:
+    if _client is None:
+        return None
+    import os
+    import uuid
+    token = f"{os.getpid()}:{uuid.uuid4().hex[:8]}"
+    ttl_ms = max(1, int(round(ttl_seconds * 1000)))
+    try:
+        ok = await _client.set(
+            _key(_LEASE_NS, name),
+            token.encode("utf-8"),
+            nx=True,
+            px=ttl_ms,
+        )
+        return token if ok else None
+    except Exception as exc:
+        logger.warning("Redis try_acquire_lease error: %s", exc)
+        return None
+
+
+async def refresh_lease(name: str, token: str, ttl_seconds: float) -> bool:
+    if _client is None:
+        return False
+    ttl_ms = max(1, int(round(ttl_seconds * 1000)))
+    try:
+        result = await _client.eval(
+            _LUA_REFRESH, 1, _key(_LEASE_NS, name), token.encode("utf-8"), ttl_ms,
+        )
+        return bool(result)
+    except Exception as exc:
+        logger.warning("Redis refresh_lease error: %s", exc)
+        return False
+
+
+async def release_lease(name: str, token: str) -> None:
+    if _client is None:
+        return
+    try:
+        await _client.eval(
+            _LUA_RELEASE, 1, _key(_LEASE_NS, name), token.encode("utf-8"),
+        )
+    except Exception as exc:
+        logger.warning("Redis release_lease error: %s", exc)
+
+
 async def prune_expired() -> None:
     """No-op — Redis expires keys server-side."""
     return None
