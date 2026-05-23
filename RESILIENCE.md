@@ -321,19 +321,42 @@ TMDB image fetches (poster/logo) and the Arctic Shift Reddit poll already have l
 
 ---
 
-## Phase 8 — Per-tenant cache namespacing + quota accounting
+## Phase 8 — Per-tenant rate limiting
 
-**Branch:** `phase-8-tenancy`
-**Status:** pending
+**Branch:** `phase-8-rate-limit`
+**Status:** implementation complete, codex review pending
 
-**Goal:** when tenants supply their own TMDB/MDBList keys, cache and quotas are scoped so tenant A can't read or drain tenant B.
+**Scope (narrowed):** the original plan also included cache namespacing — splitting the keyspace per tenant so tenant A can't read tenant B's cached posters/ratings. On closer inspection that's unnecessary: the cached data (rating values, poster bytes, composite renders) is **content-identical** regardless of which tenant's API key fetched it, and the composite cache key already includes a hash of rendering params so different per-tenant configs naturally produce different cache entries. The actually-shared resource is upstream API **quota**, not cache bytes — that's what Phase 8 protects.
 
-**Approach:**
+**Tenant identity:**
 
-- Cache keys gain a `tenant_id` prefix derived from the user-supplied key (`sha256(key)[:16]`) when keys are user-supplied. Operator-key requests share a global tenant ID.
-- Quota tracking in Redis: `INCR` with TTL per `(tenant, upstream, bucket)`. Soft cap warns in logs; hard cap returns 429 with Retry-After.
+- If the request supplies `tmdb_key=…` → tenant = `sha256(tmdb_key)[:16]`.
+- Else if the request supplies `mdblist_key=…` → tenant = `sha256(mdblist_key)[:16]`.
+- Otherwise → tenant = `operator` (single bucket for all anonymous + operator-key traffic).
 
-**Acceptance:** two tenants, two API keys, verify cache isolation in a test.
+This means tenants who bring their own keys throttle themselves without affecting other tenants. Anonymous/operator traffic shares a single bucket — for stricter isolation the operator should set `ACCESS_KEY` and gate at the edge.
+
+**`coord.check_rate_limit(tenant, rps) -> (allowed, retry_after)`:**
+
+- `inprocess`: per-tenant dict `{tenant: (window_start_epoch, count)}`. Fixed 1-second windows.
+- `redis`: `INCR postersplus:rate:<tenant>:<window>` with `EX 2` (pipeline so it's one RTT). Fail-open on Redis errors — a coord hiccup must not 429 every request.
+
+**Wired into `/poster` ([main.py:1018](main.py#L1018))** at the top of the handler, before any expensive work. Returns 429 with `Retry-After: 1` when over the limit.
+
+**Verified:**
+
+- In-process: 5 RPS limit denies the 6th call within the same second; other tenants unaffected; `rps=0` disables the check entirely.
+- Redis: same scenarios against `redis:7-alpine`; cross-process counters work (pipeline INCR+EXPIRE is atomic).
+- Container boots cleanly with `RATE_LIMIT_RPS=0` (default).
+
+**Known follow-ups:**
+
+- Sliding window (vs. the current fixed 1-second window) would smooth out the start-of-second burst pattern. Fixed window is good enough for the use case (preventing one tenant monopolising the operator's quota); sliding can come later if needed.
+- Soft-cap warning logs at e.g. 80% of the limit aren't implemented; could be added without touching the API.
+
+**Codex review (2026-05-23):** 1 P2 found and fixed.
+
+- **[P2]** In-process `_rl_buckets` dict grew unbounded — every distinct `tmdb_key=…` URL param spawned a new entry that was never reaped, so a public instance could be DoS'd by sending many unique key values. **Fixed:** opportunistic stale-bucket sweep inside `check_rate_limit` when the dict exceeds 1024 entries; periodic prune in `prune_expired` (called from the 6h cache-prune loop); full clear in `close()`. Redis backend was already bounded by `EX 2` server-side TTL.
 
 ---
 

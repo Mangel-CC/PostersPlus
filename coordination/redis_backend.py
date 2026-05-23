@@ -208,6 +208,33 @@ async def release_lease(name: str, token: str) -> None:
         logger.warning("Redis release_lease error: %s", exc)
 
 
+# ---------------------------------------------------------------------------
+# Per-tenant rate limit (fixed 1-second window, shared across replicas).
+# Returns (allowed, retry_after_seconds).
+# ---------------------------------------------------------------------------
+
+async def check_rate_limit(tenant: str, rps: int) -> tuple[bool, int]:
+    if _client is None or rps <= 0:
+        return True, 0
+    import time as _t
+    window = int(_t.time())
+    key = f"{REDIS_KEY_PREFIX}:rate:{tenant}:{window}"
+    try:
+        # INCR is atomic; EX seeds the TTL on the first hit of the window.
+        # Pipeline so we only pay one RTT.
+        async with _client.pipeline(transaction=False) as pipe:
+            pipe.incr(key)
+            pipe.expire(key, 2)   # 2s so the key survives until the window rolls
+            count, _ = await pipe.execute()
+        if count > rps:
+            return False, 1
+        return True, 0
+    except Exception as exc:
+        # Fail-open: a Redis hiccup must not 429 every request.
+        logger.warning("Redis check_rate_limit error: %s", exc)
+        return True, 0
+
+
 async def prune_expired() -> None:
     """No-op — Redis expires keys server-side."""
     return None

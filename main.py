@@ -1027,6 +1027,27 @@ async def get_poster(
             ),
         )
 
+    # Per-tenant rate limit. Tenant identity is derived from the user-supplied
+    # API key when the user brings their own (so noisy tenants throttle
+    # themselves without dragging other tenants' quotas down). Requests using
+    # the operator's keys share the "operator" bucket — a noisy anonymous
+    # caller can still saturate the operator's MDBList quota; the operator
+    # should set RATE_LIMIT_RPS or restrict ACCESS_KEY.
+    if _cfg.RATE_LIMIT_RPS > 0:
+        if tmdb_key:
+            tenant_id = hashlib.sha256(tmdb_key.encode("utf-8")).hexdigest()[:16]
+        elif mdblist_key:
+            tenant_id = hashlib.sha256(mdblist_key.encode("utf-8")).hexdigest()[:16]
+        else:
+            tenant_id = "operator"
+        allowed, retry_after = await coord.check_rate_limit(tenant_id, _cfg.RATE_LIMIT_RPS)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded ({_cfg.RATE_LIMIT_RPS} req/s)",
+                headers={"Retry-After": str(retry_after)},
+            )
+
     raw_params = {
         k: v for k, v in request.query_params.items()
         if k not in (
