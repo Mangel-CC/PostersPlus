@@ -199,24 +199,43 @@ For upstream cherry-pick: changes to upstream's `get_cached_tmdb_poster` etc. (i
 
 ---
 
-## Phase 5 — Leader-elected background jobs + per-tenant rate limit
+## Phase 5 — Leader-elected background jobs
 
-**Branch:** `phase-5-leader-and-ratelimit`
-**Status:** pending
+**Branch:** `phase-5-leader`
+**Status:** implementation complete, codex review pending
 
-**Goal:** cache-prune and digital-release-poll fire from exactly one replica. Per-tenant rate limiting for the heavy `/poster` endpoint.
+**Scope (narrowed):** the original plan also covered per-tenant rate limiting; that's been moved to Phase 8 (per-tenant cache namespacing + quota), the natural home for tenant-derived state. Phase 5 stays focused on the background-job side.
 
 **Approach:**
 
-- Leader election:
-  - Postgres backend: `SELECT pg_try_advisory_lock(<job-specific-int>)` held for the lifetime of the in-process loop. Lock released on shutdown / connection drop.
-  - SQLite backend: in-process is always leader (single-replica assumption).
-- Per-tenant rate limit:
-  - Tenant ID = `sha256(access_key)[:16]`.
-  - Sliding-window counter via the Coordinator from Phase 2.
-  - `RATE_LIMIT_RPS` env var (per tenant per second). Unset = unlimited (default).
+Coordination layer gains three new functions, both backends:
 
-**Acceptance:** scale Postgres-backed deployment to 3 replicas, observe exactly one prune log line per cycle.
+- `async try_acquire_lease(name, ttl_seconds) -> str | None` — returns an opaque token on success, None if another holder already has it.
+- `async refresh_lease(name, token, ttl_seconds) -> bool` — compare-and-set renewal; returns True iff we still hold the token.
+- `async release_lease(name, token)` — compare-and-set release; only the token-holder can delete it.
+
+**Backend implementations:**
+
+- `coordination/inprocess.py` — dict-backed `(name) -> (token, expiry)`. In-process scope only. A multi-worker uvicorn deployment ends up with one leader per worker (no shared memory), which matches upstream's existing behaviour of running the prune/poll loops N times.
+- `coordination/redis_backend.py` — `SET NX PX` for acquisition; `EVAL` with Lua compare-and-set for refresh and release so a slow replica can't blast through a faster one's lock. TTL is server-side so a crashed worker's lease expires naturally.
+
+**Wired into:**
+
+- `_cache_prune_loop` — lease TTL 8h (one cycle + buffer).
+- `digital_release_poll_loop` — lease TTL = poll interval + 1h headroom.
+
+Both loops release the lease in a `try/finally` so graceful shutdown hands it off immediately rather than waiting for TTL expiry.
+
+**Verified:**
+
+- In-process: acquire / wrong-token refresh refused / wrong-token release no-op / right-token refresh + release / TTL expiry all correct.
+- Redis: cross-client visibility (token visible from a separate redis client); compare-and-set guard rejects wrong tokens; `PEXPIRE`-based TTL expiry works.
+- Container boots cleanly; `/ready` returns 200; graceful shutdown sequence emits expected log lines in order (HTTP client → Coordinator → Blob store → Storage backend).
+
+**Codex review (2026-05-23):** two findings, both fixed:
+
+- **[P2]** Lifespan cancelled the background tasks then immediately closed the coordinator, so a Redis-backed deployment could close the connection mid-`release_lease()` and leave the cache-prune / digital-release leases stuck until 8h/25h TTL expiry. **Fixed:** the cancelled tasks are now awaited (suppressing `CancelledError`) before `coord.close()` runs, so the `finally`-block lease releases always complete first.
+- **[P3]** `coordination.inprocess.close()` cleared `_backoff` and `_inflight` but not the new `_leases` dict, so a same-interpreter lifespan restart (test harness) could see a stale lease and skip the first iteration's work. **Fixed:** added `_leases.clear()` to the close path.
 
 ---
 

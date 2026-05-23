@@ -652,21 +652,58 @@ def build_poster(
 # Lifecycle
 # ---------------------------------------------------------------------------
 
+async def _with_lease(lease_name: str, ttl_seconds: float) -> str | None:
+    """Best-effort leader election helper. Returns a lease token if this
+    replica/worker is currently the leader, None otherwise. Caller refreshes
+    the lease before each iteration (or releases it on shutdown).
+
+    With the in-process coordinator each uvicorn worker is its own leader
+    (no cross-process state). With the Redis coordinator the lease is
+    server-side and exactly one replica holds it at a time.
+    """
+    token = await coord.try_acquire_lease(lease_name, ttl_seconds)
+    if token is not None:
+        logger.info(f"Acquired lease {lease_name!r} (token={token})")
+    return token
+
+
 async def _cache_prune_loop() -> None:
-    """Periodically prune expired rows from all cache tables."""
+    """Periodically prune expired rows from all cache tables. Leader-elected
+    so multi-replica deployments only run one prune per cycle."""
+    # Lease TTL covers worst-case: one iteration's sleep + run time, plus
+    # a buffer so a slow SQLite VACUUM doesn't release the lease mid-run.
+    lease_ttl = 8 * 3600.0
+    lease_token: str | None = None
+
     # Wait a few minutes after startup before the first run so the service
     # is fully warmed before taking the SQLite write lock.
     await asyncio.sleep(300)
-    while True:
-        logger.info("Running scheduled cache prune")
-        await asyncio.get_running_loop().run_in_executor(None, prune_caches)
+    try:
+        while True:
+            if lease_token is None:
+                lease_token = await _with_lease(coord.LEASE_CACHE_PRUNE, lease_ttl)
+            else:
+                if not await coord.refresh_lease(coord.LEASE_CACHE_PRUNE, lease_token, lease_ttl):
+                    # Lost the lease (e.g. Redis expired it while we were
+                    # sleeping). Drop the token; another replica may pick it
+                    # up before we try again.
+                    logger.info(f"Lease {coord.LEASE_CACHE_PRUNE!r} lost")
+                    lease_token = None
 
-        # Coordinator-managed state (rating backoff, bg-fetch claims). On the
-        # in-process backend this evicts expired entries from per-worker dicts;
-        # on the Redis backend it's a no-op because Redis expires keys itself.
-        await coord.prune_expired()
+            if lease_token is not None:
+                logger.info("Running scheduled cache prune (leader)")
+                await asyncio.get_running_loop().run_in_executor(None, prune_caches)
+                # Coordinator-managed state (rating backoff, bg-fetch claims).
+                # On the in-process backend this evicts expired entries from
+                # per-worker dicts; Redis backend is a no-op (server expires).
+                await coord.prune_expired()
+            else:
+                logger.debug("Cache prune skipped — another replica holds the lease")
 
-        await asyncio.sleep(6 * 3600)   # every 6 hours
+            await asyncio.sleep(6 * 3600)   # every 6 hours
+    finally:
+        if lease_token is not None:
+            await coord.release_lease(coord.LEASE_CACHE_PRUNE, lease_token)
 
 
 @asynccontextmanager
@@ -683,8 +720,18 @@ async def lifespan(app: FastAPI):
     prune_task   = asyncio.create_task(_cache_prune_loop())
     digital_task = asyncio.create_task(digital_release_poll_loop(_HTTP_CLIENT))
     yield
+    # Cancel background tasks then await them so their finally blocks (which
+    # release leases via the coordinator) run before we close the coord
+    # client. Without this wait, a Redis-backed deployment would close the
+    # connection mid-release and leave the lease keys until TTL expiry,
+    # blocking other replicas from picking up the work for hours.
     prune_task.cancel()
     digital_task.cancel()
+    for _t in (prune_task, digital_task):
+        try:
+            await _t
+        except asyncio.CancelledError:
+            pass
     await _HTTP_CLIENT.aclose()
     logger.info("HTTP client closed")
     await coord.close()

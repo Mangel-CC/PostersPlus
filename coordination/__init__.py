@@ -24,6 +24,9 @@ _PUBLIC_API = (
     "clear_backoff",
     "claim_inflight",
     "release_inflight",
+    "try_acquire_lease",
+    "refresh_lease",
+    "release_lease",
     "prune_expired",
 )
 
@@ -61,3 +64,10 @@ __all__ = list(_PUBLIC_API) + ["BACKEND_KIND"]
 # create a parallel keyspace. Add new entries here.
 NS_RATING_BACKOFF: str = "rating-backoff"
 NS_QUALITY_BG: str     = "quality-bg-inflight"
+
+# Lease names for the periodic background tasks. Phase 5 leader-elects each
+# of these so multi-replica hosted deployments only run them on one replica
+# at a time. With the in-process coordinator backend each worker is still
+# its own leader (no cross-process state), which matches upstream behaviour.
+LEASE_CACHE_PRUNE: str   = "cache-prune"
+LEASE_DIGITAL_RELEASE: str = "digital-release-poll"

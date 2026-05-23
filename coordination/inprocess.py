@@ -31,6 +31,7 @@ async def init() -> None:
 async def close() -> None:
     _backoff.clear()
     _inflight.clear()
+    _leases.clear()
 
 
 def ping() -> bool:
@@ -74,6 +75,49 @@ async def claim_inflight(namespace: str, key: str, ttl_seconds: float = 300.0) -
 
 async def release_inflight(namespace: str, key: str) -> None:
     _inflight.pop((namespace, key), None)
+
+
+# ---------------------------------------------------------------------------
+# Named leases — used by Phase 5 leader election for periodic jobs.
+#
+# In-process scope only. A multi-worker uvicorn deployment ends up with one
+# leader per worker process (no shared memory between workers), which means
+# the prune/poll loops still run N times. That matches upstream's existing
+# behaviour. True single-leader-across-workers requires the Redis backend.
+# ---------------------------------------------------------------------------
+
+_leases: dict[str, tuple[str, float]] = {}   # name -> (token, expiry)
+
+
+async def try_acquire_lease(name: str, ttl_seconds: float) -> str | None:
+    """Acquire a named lease. Returns an opaque token on success, None if
+    another holder already has it.
+    """
+    import os
+    import uuid
+    now = asyncio.get_running_loop().time()
+    existing = _leases.get(name)
+    if existing is not None and existing[1] > now:
+        return None
+    token = f"{os.getpid()}:{uuid.uuid4().hex[:8]}"
+    _leases[name] = (token, now + ttl_seconds)
+    return token
+
+
+async def refresh_lease(name: str, token: str, ttl_seconds: float) -> bool:
+    """Renew the lease iff we still hold the token. Returns True on success."""
+    existing = _leases.get(name)
+    if existing is None or existing[0] != token:
+        return False
+    now = asyncio.get_running_loop().time()
+    _leases[name] = (token, now + ttl_seconds)
+    return True
+
+
+async def release_lease(name: str, token: str) -> None:
+    existing = _leases.get(name)
+    if existing is not None and existing[0] == token:
+        _leases.pop(name, None)
 
 
 async def prune_expired() -> None:
