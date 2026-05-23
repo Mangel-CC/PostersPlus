@@ -167,18 +167,35 @@ For upstream cherry-pick: changes to upstream's `get_cached_tmdb_poster` etc. (i
 ## Phase 4 — Bounded render concurrency + split health probes
 
 **Branch:** `phase-4-render-bounds`
-**Status:** pending
+**Status:** implementation complete, codex review pending
 
-**Goal:** cap concurrent Pillow renders, return 503 with Retry-After when saturated, split `/health` into `/live` and `/ready`.
+**Render concurrency cap:**
 
-**Approach:**
+- New `_render_semaphore` created lazily on first `/poster` request, sized by `config.RENDER_CONCURRENCY` (default = `os.cpu_count()`).
+- The semaphore wraps the `run_in_executor(_composite_and_encode)` call — so the Pillow + JPEG encode work that pins a CPU core is what's being capped, not the rest of the pipeline (TMDB fetches, etc.).
+- `RENDER_QUEUE_TIMEOUT` (default 30s) controls how long a queued request will wait. On timeout, return **503 + Retry-After: 5** so clients back off rather than compounding the saturation. The in-flight `_render_fut` (if any) is rejected with the same exception so coalesced callers also see the 503.
+- Set `RENDER_QUEUE_TIMEOUT=0` to disable the timeout (wait forever — matches upstream behaviour).
 
-- `RENDER_CONCURRENCY` env var (default = `os.cpu_count()`). `asyncio.Semaphore(N)` around `_composite_and_encode`.
-- `/live` keeps current `/health` behaviour (process alive only).
-- `/ready` checks DB ping + coordinator ping + (if configured) blob store HEAD. Returns 503 with structured reason on failure.
-- `/health` aliases to `/live` for backwards compat.
+**Split probes:**
 
-**Acceptance:** load test shows 503 instead of OOM when saturated; k8s probes wire up cleanly.
+- `/live` — process-alive only, identical body to upstream's `/health`.
+- `/health` — alias of `/live` for upstream compatibility (the Docker healthcheck in compose.yaml still hits `/health`).
+- `/ready` — checks storage, coordinator, and blob-store backends in parallel. Returns 200 with a JSON breakdown when all are reachable; 503 with the same breakdown otherwise.
+
+**Verified end-to-end:**
+
+- `/health`, `/live`, `/ready` all 200 in default mode.
+- `/ready` body in Postgres mode: `{"storage": {"kind": "postgresql", "ok": true}, ...}`.
+- Killing Postgres mid-flight: `/ready` flips to 503 with `"storage": {"ok": false}`; `/live` stays 200. Exactly the k8s readiness/liveness split we want — replica leaves rotation, but process isn't restarted for a transient backend hiccup.
+
+**Codex review (2026-05-23):** two findings, both fixed:
+
+- **[P1]** The 503 from render-queue saturation was raised inside a `try` whose final `except Exception` swallowed it and re-raised 500 — losing both the status code and the `Retry-After: 5` header. **Fixed:** added an explicit `except HTTPException: raise` before the generic handler so intentional HTTPExceptions propagate untouched.
+- **[P2]** `/ready` called the sync `cache.ping()` / `blobstore.ping()` directly from an async handler. With Postgres on a slow link, the connection probe would block the event loop and delay `/live` plus normal requests — exactly what the probe split is meant to prevent. **Fixed:** wrapped both sync pings in `asyncio.to_thread` and run all three checks concurrently with `asyncio.gather`.
+
+**Known follow-ups:**
+
+- Render-saturation load test (multi-process k6 against /poster) is left for the deployment readiness checklist — code-level verification + the codex review cover the behaviour.
 
 ---
 

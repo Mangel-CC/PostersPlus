@@ -41,6 +41,9 @@ services:
       - OBJECT_STORE_PUBLIC_URL=${OBJECT_STORE_PUBLIC_URL:-}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      # Phase 4: render concurrency cap + queue timeout.
+      - RENDER_CONCURRENCY=${RENDER_CONCURRENCY:-0}
+      - RENDER_QUEUE_TIMEOUT=${RENDER_QUEUE_TIMEOUT:-30}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s

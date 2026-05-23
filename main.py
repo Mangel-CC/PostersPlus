@@ -71,6 +71,16 @@ logger = logging.getLogger(__name__)
 _render_inflight: dict[str, "asyncio.Future[bytes]"] = {}
 
 # ---------------------------------------------------------------------------
+# Render concurrency cap (ElfHosted fork — Phase 4)
+# ---------------------------------------------------------------------------
+# Pillow composite + JPEG encode pins one CPU core per render. Without a cap
+# a burst of unique-param /poster requests fans out across the default
+# asyncio thread-pool (min(32, ncpu+4) slots) and pins every core, starving
+# /health and /ready. The semaphore here is created lazily inside the event
+# loop on first /poster request, sized by config.RENDER_CONCURRENCY.
+_render_semaphore: "asyncio.Semaphore | None" = None
+
+# ---------------------------------------------------------------------------
 # Background quality fetching
 # ---------------------------------------------------------------------------
 # Quality data (AIOStreams / scrapers) is fetched in the background so poster
@@ -730,9 +740,62 @@ def _load_configurator_html() -> str:
 
 
 @app.get("/health")
-async def health_check():
-    """Lightweight liveness probe — no auth required, used by Docker healthcheck."""
+@app.get("/live")
+async def liveness_probe():
+    """Lightweight liveness probe — no auth required.
+
+    /health is kept as an alias of /live for upstream compatibility (the
+    Docker healthcheck in compose.yaml hits /health). Kubernetes deployments
+    should use /live for liveness and /ready for readiness.
+    """
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def readiness_probe():
+    """Readiness probe — checks the backends this replica depends on.
+
+    Used by Kubernetes / load balancers to remove a replica from rotation
+    when one of its dependencies is unhealthy. Each check runs in parallel
+    so a slow backend doesn't block the others.
+
+    Returns 200 with a JSON breakdown when all backends are reachable, or
+    503 with the same breakdown when at least one is not. Independent of
+    /live so a transient backend hiccup pulls the replica out of rotation
+    without killing the process.
+    """
+    import cache as _cache_mod
+    import blobstore as _blob_mod
+
+    # Run every probe concurrently. The sync ones (SQLite ping, FS dir
+    # check, S3 head when not via boto3-async) go to the threadpool so a
+    # stalled backend can't pin the event loop and starve /live or normal
+    # request handlers.
+    async def _coord_check() -> bool:
+        if coord.BACKEND_KIND == "redis":
+            from coordination import redis_backend as _rb
+            return await _rb.aping()
+        return coord.ping()
+
+    db_ok, blob_ok, coord_ok = await asyncio.gather(
+        asyncio.to_thread(_cache_mod.ping),
+        asyncio.to_thread(_blob_mod.ping),
+        _coord_check(),
+    )
+
+    body = {
+        "storage":     {"kind": _cache_mod.BACKEND_KIND, "ok": db_ok},
+        "coordinator": {"kind": coord.BACKEND_KIND,      "ok": coord_ok},
+        "blobstore":   {"kind": _blob_mod.BACKEND_KIND,  "ok": blob_ok},
+    }
+    all_ok = db_ok and coord_ok and blob_ok
+    if not all_ok:
+        return Response(
+            content=__import__("json").dumps({"status": "degraded", **body}),
+            status_code=503,
+            media_type="application/json",
+        )
+    return {"status": "ok", **body}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1210,9 +1273,39 @@ async def get_poster(
             result.convert("RGB").save(buf, format="JPEG", quality=85)
             return buf.getvalue()
 
-        img_bytes = await asyncio.get_running_loop().run_in_executor(
-            None, _composite_and_encode
-        )
+        # Acquire a render slot. If RENDER_QUEUE_TIMEOUT is configured and
+        # exceeded, return 503 with Retry-After so the client backs off
+        # instead of compounding the saturation. The semaphore is created
+        # lazily inside the event loop the first time we get here.
+        global _render_semaphore
+        if _render_semaphore is None:
+            _render_semaphore = asyncio.Semaphore(_cfg.RENDER_CONCURRENCY)
+        try:
+            if _cfg.RENDER_QUEUE_TIMEOUT > 0:
+                await asyncio.wait_for(
+                    _render_semaphore.acquire(),
+                    timeout=_cfg.RENDER_QUEUE_TIMEOUT,
+                )
+            else:
+                await _render_semaphore.acquire()
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Render queue saturated (cap={_cfg.RENDER_CONCURRENCY}); "
+                f"returning 503 for tmdb_id={tmdb_id}"
+            )
+            if _render_fut is not None and not _render_fut.done():
+                _render_fut.set_exception(HTTPException(status_code=503))
+            raise HTTPException(
+                status_code=503,
+                detail="Server saturated — try again shortly",
+                headers={"Retry-After": "5"},
+            )
+        try:
+            img_bytes = await asyncio.get_running_loop().run_in_executor(
+                None, _composite_and_encode
+            )
+        finally:
+            _render_semaphore.release()
 
         # Persist the finished poster so future requests skip the pipeline.
         # Skipped when quality is still being fetched in the background — the
@@ -1251,6 +1344,11 @@ async def get_poster(
             raise HTTPException(status_code=404, detail="Poster image not found on TMDB")
         logger.error(f"Upstream HTTP {status} for tmdb_id={tmdb_id}: {exc}")
         raise HTTPException(status_code=502, detail=f"Upstream error {status}")
+    except HTTPException:
+        # Preserve intentional HTTPExceptions raised inside the try block —
+        # notably the 503/Retry-After from render-queue saturation — so the
+        # generic Exception handler below doesn't downgrade them to 500.
+        raise
     except Exception as exc:
         if _render_fut is not None and not _render_fut.done():
             _render_fut.set_exception(exc)
