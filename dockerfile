@@ -2,11 +2,14 @@
 ##
 ## Builder stage installs wheels (build-essential needed for any source-only
 ## packages) and the final stage is a lean python:3.11-slim with only the
-## site-packages, app sources, and gosu (for the volume-perm drop in
-## entrypoint.sh — upstream's permission fix).
+## site-packages and app sources.
 ##
-## The base image is pinned to a digest. Bump the digest deliberately when
-## you want to track a new python:3.11-slim release.
+## Runs as appuser from the start — no gosu / root-startup dance. On
+## Kubernetes the deployment's SecurityContext (runAsNonRoot, runAsUser,
+## fsGroup) handles per-container user policy and volume permissions, so
+## the container doesn't need to drop privileges at runtime. For docker
+## compose users on a fresh host volume: chown the host directory before
+## the first `up`, or set the volume's uid/gid in compose.yaml.
 
 FROM python:3.11-slim AS builder
 
@@ -24,19 +27,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 
-## Final runtime image. Runs as root so entrypoint.sh can fix cache volume
-## permissions, then drops to appuser via gosu before exec-ing uvicorn.
+## Final runtime image.
 
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# curl for the compose healthcheck; ca-certificates for TLS to TMDB / MDBList / S3;
-# gosu for the privilege drop in entrypoint.sh.
+# curl for the compose healthcheck; ca-certificates for TLS to TMDB / MDBList / S3.
+# No compiler toolchain in the runtime image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
-        gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy site-packages from the builder. /install is a `--prefix=`-style
@@ -45,15 +46,15 @@ COPY --from=builder /install /usr/local
 
 RUN adduser --disabled-password --gecos '' appuser
 
-# Copy app files and set ownership on everything except the cache dir,
-# which is a runtime volume mount — permissions are fixed by entrypoint.sh.
+# Copy app files and create cache dir while still root, then hand ownership over.
 COPY . .
-RUN chown -R appuser:appuser /app
+RUN mkdir -p /app/cache /app/cache/tmdb_posters /app/cache/tmdb_logos \
+    && chown -R appuser:appuser /app
+
+USER appuser
 
 # Healthcheck via curl is lighter than spawning python.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -fs http://localhost:8000/live || exit 1
 
-# No USER directive — entrypoint.sh runs as root briefly to chown the cache
-# volume + prom multiproc dir, then `exec gosu appuser …` drops privileges.
 CMD ["/bin/sh", "entrypoint.sh"]
