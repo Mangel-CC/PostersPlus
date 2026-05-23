@@ -143,6 +143,7 @@ from cache import (
     set_cached_rating,
     delete_cached_tmdb_metadata,
     prune_caches,
+    close as close_db,
 )
 from digital_release import digital_release_poll_loop
 import config as _cfg
@@ -673,6 +674,8 @@ async def lifespan(app: FastAPI):
     digital_task.cancel()
     await _HTTP_CLIENT.aclose()
     logger.info("HTTP client closed")
+    close_db()
+    logger.info("Storage backend closed")
 
 
 app = FastAPI(lifespan=lifespan)
