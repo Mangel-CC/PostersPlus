@@ -24,6 +24,15 @@ AIOSTREAMS_AUTH       = os.environ.get("AIOSTREAMS_AUTH", "")
 SERVER_TMDB_KEY       = os.environ.get("TMDB_API_KEY", "").strip()
 SERVER_MDBLIST_KEY    = os.environ.get("MDBLIST_API_KEY", "").strip()
 
+# Hosted-mode storage backend (ElfHosted fork).
+#
+# When DATABASE_URL is set to a postgresql:// URL, the cache layer switches
+# from SQLite to PostgreSQL. Unset (the default) preserves upstream behaviour.
+# See storage/__init__.py for backend selection logic.
+DATABASE_URL          = os.environ.get("DATABASE_URL", "").strip()
+DB_POOL_MIN_SIZE      = int(os.environ.get("DB_POOL_MIN_SIZE", "1"))
+DB_POOL_MAX_SIZE      = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))
+
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a
 # Cache-Control: public header so Cloudflare (or any CDN) caches them at the

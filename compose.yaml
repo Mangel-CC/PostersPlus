@@ -24,9 +24,35 @@ services:
       - COMPOSITE_CACHE_TTL=${COMPOSITE_CACHE_TTL:-604800}
       - COMPOSITE_MAX_ENTRIES=${COMPOSITE_MAX_ENTRIES:-0}
       - DEFAULT_LOGO_LANGUAGE=${DEFAULT_LOGO_LANGUAGE:-en}
+      # ElfHosted fork — hosted-mode backend selection.
+      # Leave DATABASE_URL unset to use SQLite (default). Set it to a
+      # postgresql:// URL to opt into the Postgres backend. The optional
+      # "hosted" profile below provisions a local Postgres for development.
+      - DATABASE_URL=${DATABASE_URL:-}
+      - DB_POOL_MIN_SIZE=${DB_POOL_MIN_SIZE:-1}
+      - DB_POOL_MAX_SIZE=${DB_POOL_MAX_SIZE:-10}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # Optional Postgres for hosted-mode dev. Activate with:
+  #   docker compose --profile hosted up -d
+  # then set DATABASE_URL=postgresql://postersplus:postersplus@postgres:5432/postersplus
+  postgres:
+    profiles: ["hosted"]
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postersplus
+      POSTGRES_PASSWORD: postersplus
+      POSTGRES_DB: postersplus
+    volumes:
+      - ./postersplus-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postersplus -d postersplus"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
