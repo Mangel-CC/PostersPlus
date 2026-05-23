@@ -242,22 +242,42 @@ Both loops release the lease in a `try/finally` so graceful shutdown hands it of
 ## Phase 6 — Prometheus metrics + structured logging
 
 **Branch:** `phase-6-observability`
-**Status:** pending
+**Status:** implementation complete, codex review pending
 
-**Goal:** `/metrics` endpoint with useful counters/histograms; logs become JSON when `LOG_FORMAT=json`.
+**Metrics (`metrics.py`):**
 
-**Approach:**
+- `postersplus_cache_lookups_total{table, result}` — counter. Tables: `final_poster`, `rating`, `quality`, `tmdb_metadata`, `tmdb_poster`, `tmdb_logo`. Result: `hit` or `miss`. Wrapped in `cache.py` at the public API, so both SQLite and Postgres backends are instrumented uniformly.
+- `postersplus_render_duration_seconds` — histogram around the Pillow composite + JPEG encode work (buckets 0.05s – 10s).
+- `postersplus_render_inflight` — gauge incremented while inside the render semaphore.
+- `postersplus_render_saturated_total` — counter incremented when `/poster` returns 503 because the queue timed out.
+- `postersplus_upstream_calls_total{service, status}` — counter scaffold; wiring to the actual TMDB/MDBList/AIOStreams call sites is deferred to Phase 7 where upstream resilience already touches those paths.
+- `postersplus_backend_info{storage, coordinator, blobstore}` — gauge always 1; the label values carry the active backend identities so dashboards can group by mode.
 
-- `prometheus_client` ASGI middleware on `/metrics` (no auth — bind to internal port via reverse-proxy convention, or gate with `METRICS_ACCESS_KEY`).
-- Metrics:
-  - `postersplus_cache_lookups_total{table, result}` (hit/miss/stale)
-  - `postersplus_upstream_calls_total{service, status}` (TMDB/MDBList/AIOStreams)
-  - `postersplus_render_duration_seconds` histogram
-  - `postersplus_render_inflight` gauge
-  - `postersplus_composite_cache_size_bytes` gauge (sampled)
-- Logs: standard `logging` config with `python-json-logger` formatter when `LOG_FORMAT=json`. Request ID via `contextvars` injected by ASGI middleware (`X-Request-ID` header pass-through / generation).
+**`/metrics` endpoint:**
 
-**Acceptance:** scrape and visualise on a local Prometheus + Grafana.
+- Unauthenticated by default. Set `METRICS_ACCESS_KEY` to require `?access_key=…` (constant-time compared, same pattern as the main access key).
+- No separate metrics port — operators wanting strict isolation should bind the app behind an ingress that restricts `/metrics`.
+
+**Structured JSON logs:**
+
+- `LOG_FORMAT=json` swaps the root formatter to `python-json-logger`. Each log line becomes a single JSON object with `asctime`, `levelname`, `name`, `message` keys. Falls back to text format if the package is missing (defensive — `requirements.txt` always installs it).
+- Default `LOG_FORMAT=text` matches upstream.
+
+**Multi-worker aggregation:**
+
+- `entrypoint.sh` sets `PROMETHEUS_MULTIPROC_DIR=/tmp/postersplus-prom` and clears stale files at startup. Each uvicorn worker writes to its own files in that directory.
+- `/metrics` builds a `CollectorRegistry` + `MultiProcessCollector` when `PROMETHEUS_MULTIPROC_DIR` is set, so a scrape aggregates across all workers regardless of which one served the request. Without this, the default `WORKERS=2` would make every scrape see only half the traffic and counters would appear to jump or reset.
+- Gauges declare multiproc modes (`livesum` for in-flight, `max` for backend_info) so they aggregate sensibly across workers.
+
+**Verified:**
+
+- `/metrics` returns counters + histogram + gauges; no auth in default mode, 403 when `METRICS_ACCESS_KEY` is set and missing.
+- `LOG_FORMAT=json` emits JSON lines.
+- WORKERS=2: `backend_info{blobstore=local, coordinator=inprocess, storage=sqlite} 1.0` aggregates to a single value despite 4 per-worker prom files in `/tmp/postersplus-prom/`.
+
+**Codex review (2026-05-23):** 1 P2 found and fixed.
+
+- **[P2]** Without `PROMETHEUS_MULTIPROC_DIR`, scrapes only saw the worker that happened to serve `/metrics`, so the metrics endpoint was unreliable in the default `WORKERS=2` deployment. **Fixed:** entrypoint.sh sets the multiproc dir; `/metrics` builds a `MultiProcessCollector`-backed registry when the env var is present; gauges declare explicit aggregation modes.
 
 ---
 
