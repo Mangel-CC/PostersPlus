@@ -101,10 +101,14 @@ async def fetch_quality_from_aiostreams(
         aio_id   = imdb_id
         aio_type = "movie"
 
+    import upstream
     try:
         logger.info(f"External API Call: AIOStreams Quality Fetch For {imdb_id}")
-        resp = await client.get(
+        resp = await upstream.request(
+            client, "GET",
             f"{AIOSTREAMS_URL.rstrip('/')}/api/v1/search",
+            service=upstream.SVC_AIOSTREAMS,
+            raise_for_status=False,
             params={"type": aio_type, "id": aio_id},
             headers={"Authorization": f"Basic {AIOSTREAMS_AUTH}"},
         )
@@ -162,6 +166,9 @@ async def fetch_quality_from_aiostreams(
         set_cached_quality(imdb_id, tokens, release_date)
         return tokens
 
+    except upstream.CircuitOpenError:
+        logger.warning(f"AIOStreams circuit open — skipping quality fetch for {imdb_id}")
+        return FETCH_FAILED
     except Exception as exc:
         logger.error(f"AIOStreams fetch error for {imdb_id}: {exc}")
         return FETCH_FAILED

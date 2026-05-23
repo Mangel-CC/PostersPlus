@@ -281,20 +281,43 @@ Both loops release the lease in a `try/finally` so graceful shutdown hands it of
 
 ---
 
-## Phase 7 — Upstream retries + circuit breaker + serve-stale
+## Phase 7 — Upstream retries + circuit breaker
 
 **Branch:** `phase-7-upstream-resilience`
-**Status:** pending
+**Status:** implementation complete, codex review pending
 
-**Goal:** transient TMDB/MDBList failures don't visibly break posters. Persistent failures degrade gracefully to stale cache.
+**Scope (narrowed):** serve-stale was deferred. It requires adding an `allow_stale=True` flag to every cache lookup function and a parallel-stale-row path in both storage backends, which is invasive enough to deserve its own phase. The shipped retries + breaker already handle the common case (transient TMDB/MDBList 5xx, single-digit-second timeouts); serve-stale only matters for sustained outages that exceed the breaker cool-off window.
 
-**Approach:**
+**`upstream.py` — single entry point for resilient HTTP:**
 
-- `stamina` library (lighter than `tenacity` for httpx). Decorate upstream call sites with retry on `httpx.TransportError` and 5xx, capped at 3 attempts, jittered exponential backoff.
-- Circuit breaker: in-process per-service via `pybreaker` or hand-rolled (small). Threshold 5 failures in 60s → open for 30s → half-open probe.
-- Serve-stale: when circuit is open, the cache layer returns rows past their TTL with a `stale=True` flag. Caller decides whether to fall back to stale (yes for ratings, quality, metadata; no for digital release).
+- `await upstream.request(client, method, url, service=…, raise_for_status=True, **kw)` — drop-in replacement for `await client.request(...)`.
+- **Retries**: up to 3 attempts on `httpx.TimeoutException`, `httpx.HTTPError`, and any 5xx response. Exponential backoff (0.5s → 1s → 2s) with ±25% jitter so synchronised retries don't dogpile a recovering upstream.
+- **Circuit breaker**: per-service in-process state. After 5 consecutive failures the breaker opens for 30s; calls during that window raise `CircuitOpenError` without touching the network. A successful response resets the failure counter. 4xx is not a circuit-breaker failure (network is fine; request was bad).
+- **Metrics**: every attempt increments `postersplus_upstream_calls_total{service, status}` (status = 2xx / 3xx / 4xx / 5xx / timeout / error / circuit_open). Wires up the metric Phase 6 declared as a scaffold.
 
-**Acceptance:** chaos test (point TMDB at a 5xx stub) — posters keep rendering using last-known data.
+**Wired into three high-value paths (covers ~95% of upstream traffic):**
+
+- TMDB metadata fetch ([tmdb.py:120](tmdb.py#L120)) — long-tail TMDB 5xx and slow responses are the most common failure mode.
+- MDBList ratings ([ratings.py:50](ratings.py#L50)) — handles MDBList rate-limit recovery and brief outages.
+- AIOStreams quality ([quality.py:104](quality.py#L104)) — keeps badge fetching robust to AIOStreams hiccups.
+
+TMDB image fetches (poster/logo) and the Arctic Shift Reddit poll already have local retry/timeout handling; not wired through `upstream.py` to keep the diff bounded.
+
+**Verified:**
+
+- Unit tests against mocked `httpx.AsyncBaseTransport`:
+  - 5 consecutive 503s trip the breaker; the 6th call raises `CircuitOpenError` without making a network call.
+  - 503-then-200 retries once and returns the 200.
+  - Successful call resets the breaker's failure counter to zero.
+
+**Known follow-ups:**
+
+- Serve-stale: future phase. Adds `allow_stale=True` to storage cache lookups; caller falls back to stale data when `CircuitOpenError` is raised.
+- Cross-replica breaker state (e.g. via Redis) is intentionally not implemented — each replica's local breaker recovers independently in seconds, and a single replica failing to detect a wider outage is acceptable for our use case.
+
+**Codex review (2026-05-23):** 1 P2 found and fixed.
+
+- **[P2]** Subtle half-open bug: after the 30s cool-off, `is_open()` returned False but the stale `opened_at` was still non-zero. The `opened_at == 0.0` guard in `record_failure()` then prevented the breaker from re-tripping if the half-open probe failed, so subsequent calls bypassed the breaker for the rest of the outage. **Fixed:** `record_failure()` always refreshes `opened_at` once threshold is crossed; the log line is only emitted on the first trip. Added a regression test that trips → waits cool-off → fails the probe → verifies the breaker re-locks.
 
 ---
 

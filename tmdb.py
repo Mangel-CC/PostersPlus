@@ -118,14 +118,16 @@ async def fetch_poster_metadata(
         )
 
     logger.info(f"External API Call: Requested meta from TMDB for {tmdb_id}")
-    resp = await client.get(
+    import upstream
+    resp = await upstream.request(
+        client, "GET",
         f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}",
+        service=upstream.SVC_TMDB,
         params={
             "api_key": tmdb_key,
             "append_to_response": "images,credits",
         },
     )
-    resp.raise_for_status()
     data = resp.json()
 
     title = (
