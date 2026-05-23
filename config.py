@@ -56,6 +56,19 @@ OBJECT_STORE_URL        = os.environ.get("OBJECT_STORE_URL", "").strip()
 # this unset is fine; bytes will be fetched server-side as needed.
 OBJECT_STORE_PUBLIC_URL = os.environ.get("OBJECT_STORE_PUBLIC_URL", "").strip()
 
+# Hosted-mode resource ceilings (ElfHosted fork — Phase 4).
+#
+# RENDER_CONCURRENCY caps the number of Pillow renders in flight at once.
+# Each render uses one CPU core fully + ~10MB of transient RAM, so a burst
+# of unique-param requests can otherwise pin every core and exhaust the
+# event loop. Default is os.cpu_count() so single-tenant deployments behave
+# the same as upstream (no artificial cap below available cores).
+RENDER_CONCURRENCY      = int(os.environ.get("RENDER_CONCURRENCY", "0")) or (os.cpu_count() or 2)
+# How long /poster will wait for a render slot before returning 503. Set to
+# 0 to never timeout (wait forever). Default of 30s gives clients a clear
+# signal to back off when the server is saturated.
+RENDER_QUEUE_TIMEOUT    = float(os.environ.get("RENDER_QUEUE_TIMEOUT", "30"))
+
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a
 # Cache-Control: public header so Cloudflare (or any CDN) caches them at the
