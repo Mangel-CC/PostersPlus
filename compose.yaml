@@ -31,6 +31,10 @@ services:
       - DATABASE_URL=${DATABASE_URL:-}
       - DB_POOL_MIN_SIZE=${DB_POOL_MIN_SIZE:-1}
       - DB_POOL_MAX_SIZE=${DB_POOL_MAX_SIZE:-10}
+      # Phase 2: Redis coordination (opt-in). Leave REDIS_URL unset for the
+      # in-process default. The hosted profile provisions a local Redis.
+      - REDIS_URL=${REDIS_URL:-}
+      - REDIS_KEY_PREFIX=${REDIS_KEY_PREFIX:-postersplus}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -55,4 +59,18 @@ services:
       test: ["CMD-SHELL", "pg_isready -U postersplus -d postersplus"]
       interval: 10s
       timeout: 5s
+      retries: 5
+
+  # Optional Redis for hosted-mode coordination (Phase 2). Activate with the
+  # `hosted` profile (same as the postgres service above) and set
+  # REDIS_URL=redis://redis:6379/0
+  redis:
+    profiles: ["hosted"]
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
       retries: 5
