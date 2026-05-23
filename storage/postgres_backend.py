@@ -4,8 +4,9 @@ Mirrors the public surface of storage.sqlite_backend so upstream's API is
 preserved exactly. Operates against a connection pool so multiple replicas /
 workers can share a single Postgres instance.
 
-Filesystem-backed TMDB poster/logo cache is delegated to sqlite_backend's
-helpers — Phase 3 introduces a BlobStore abstraction that replaces both.
+TMDB poster/logo bytes are routed through the ``blobstore`` package (Phase 3),
+which selects local FS by default or S3-compatible storage when
+``OBJECT_STORE_URL`` is set.
 """
 import logging
 import os
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 import psycopg
 from psycopg_pool import ConnectionPool
 
+import blobstore
 from config import (
     DATABASE_URL,
     DB_POOL_MIN_SIZE,
@@ -27,7 +29,9 @@ from config import (
     OLD_CACHE_DURATION,
     TRENDING_CACHE_DURATION,
     TMDB_POSTER_CACHE_DIR,
+    TMDB_POSTER_CACHE_DURATION,
     TMDB_LOGO_CACHE_DIR,
+    TMDB_LOGO_CACHE_DURATION,
     TMDB_METADATA_CACHE_DURATION,
     COMPOSITE_CACHE_TTL,
     COMPOSITE_MAX_ENTRIES,
@@ -35,19 +39,32 @@ from config import (
     DIGITAL_RELEASE_MAX_AGE_DAYS,
 )
 
-# Filesystem helpers and TMDB poster/logo cache are shared with the SQLite
-# backend so a future cherry-pick of upstream's filesystem code only has to
-# update one module.
-from storage.sqlite_backend import (
-    _safe_cache_path,
-    _remove_if_dir,
-    get_cached_tmdb_poster,
-    set_cached_tmdb_poster,
-    get_cached_tmdb_logo,
-    set_cached_tmdb_logo,
-)
 # TTL helpers are pure functions — reuse rather than duplicate.
 from storage.sqlite_backend import _rating_ttl, _quality_ttl
+
+
+_POSTER_TTL_SECONDS = TMDB_POSTER_CACHE_DURATION * 86400
+_LOGO_TTL_SECONDS   = TMDB_LOGO_CACHE_DURATION   * 86400
+
+
+# TMDB poster/logo bytes — delegated to blobstore. Identical to the SQLite
+# backend's wrappers; defined here so the Postgres backend is a self-contained
+# module with no compile-time dependency on the SQLite module's content
+# (only the pure TTL helpers above).
+async def get_cached_tmdb_poster(cache_key: str) -> bytes | None:
+    return await blobstore.get(blobstore.BUCKET_TMDB_POSTERS, cache_key, _POSTER_TTL_SECONDS)
+
+
+async def set_cached_tmdb_poster(cache_key: str, data: bytes) -> None:
+    await blobstore.put(blobstore.BUCKET_TMDB_POSTERS, cache_key, data, content_type="image/jpeg")
+
+
+async def get_cached_tmdb_logo(cache_key: str) -> bytes | None:
+    return await blobstore.get(blobstore.BUCKET_TMDB_LOGOS, cache_key, _LOGO_TTL_SECONDS)
+
+
+async def set_cached_tmdb_logo(cache_key: str, data: bytes) -> None:
+    await blobstore.put(blobstore.BUCKET_TMDB_LOGOS, cache_key, data, content_type="image/png")
 
 
 _pool: ConnectionPool | None = None
