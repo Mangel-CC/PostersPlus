@@ -1,0 +1,219 @@
+#config.py
+# If you're looking to change the highlighted directors, studios and cast:
+#   - Source editors:  edit the lists in discovery.py directly.
+#   - Docker operators (no source editing): place a JSON file at
+#     /app/cache/discovery_overrides.json (inside the existing cache volume,
+#     no extra mount needed).
+#     See the docstring at the top of discovery.py for the full format,
+#     or the project README for a ready-made sample.
+import os
+import json
+
+# Storage
+
+DB_PATH               = "/app/cache/cache.db"
+BADGE_DIR             = "/app/badges"
+TMDB_POSTER_CACHE_DIR = "/app/cache/tmdb_posters" # base posters from TMDB
+TMDB_LOGO_CACHE_DIR   = "/app/cache/tmdb_logos" # base logos from TMDB
+
+# Environment
+
+ACCESS_KEY            = os.environ.get("ACCESS_KEY")
+AIOSTREAMS_URL        = os.environ.get("AIOSTREAMS_URL", "")
+AIOSTREAMS_AUTH       = os.environ.get("AIOSTREAMS_AUTH", "")
+SERVER_TMDB_KEY       = os.environ.get("TMDB_API_KEY", "").strip()
+SERVER_MDBLIST_KEY    = os.environ.get("MDBLIST_API_KEY", "").strip()
+
+# Workers
+# CDN cache TTL (seconds). When > 0, poster responses include a
+# Cache-Control: public header so Cloudflare (or any CDN) caches them at the
+# edge. Set to 0 to disable (e.g. when running without a CDN).
+CDN_CACHE_TTL         = int(os.environ.get("CDN_CACHE_TTL", "0"))
+
+# Feature Defaults 
+
+SHOW_RATING_DISPLAY_MODE = 1
+SHOW_AWARD_SASH          = True
+BADGE_DISPLAY_MODE = 2
+
+# Poster Dimensions
+
+POSTER_WIDTH  = 500
+POSTER_HEIGHT = 750
+
+# Rating & Genre Label Defaults
+
+ACCENT_BAR_MODE_FONT_SIZE_RATIO    = 0.08   # font size in accent bar mode
+NUMERIC_SCORE_MODE_FONT_SIZE_RATIO = 0.10   # font size in numeric mode
+MINIMALIST_MODE_FONT_SIZE_RATIO    = 0.055  # font size in minimalist mode
+ACCENT_BAR_MODE_FONT_Y_OFFSET      = 0.90   # vertical alignment in accent bar mode
+NUMERIC_SCORE_MODE_FONT_Y_OFFSET   = 0.90   # vertical alignment in numeric score mode
+MINIMALIST_MODE_FONT_X_OFFSET      = 0.04   # horizontal distance from right edge in minimalist mode
+MINIMALIST_MODE_FONT_Y_OFFSET      = 0.92   # vertical position in minimalist mode (0=top, 1=bottom)
+
+SCORE_GLOW_THRESHOLD = 85  # score threshold to activate glow
+SCORE_GLOW_BLUR      = 2    # blur applied in glow mode
+SCORE_GLOW_ALPHA     = 40   # alpha of the glow applied
+
+# Logo Defaults
+
+LOGO_MAX_W_RATIO  = 0.84   # max width of logo
+LOGO_MAX_H_RATIO  = 0.17   # max height of logo
+LOGO_BOTTOM_RATIO = 0.28   # distance of logo from the bottom
+DEFAULT_LOGO_LANGUAGE = os.environ.get("DEFAULT_LOGO_LANGUAGE", "en")
+
+# Quality Badge Defaults
+
+BADGE_HEIGHT = 32   # quality badge height in pixels
+BADGE_GAP    = 8    # gap between horizontal stack badges in pixels
+
+BADGE_ANCHOR_X_RATIO = 0.050   # x offset from left
+BADGE_ANCHOR_Y_RATIO = 0.050   # y offset from top 
+
+# TTL Settings
+
+TMDB_POSTER_CACHE_DURATION   = 60
+TMDB_LOGO_CACHE_DURATION     = 60
+TMDB_METADATA_CACHE_DURATION = 7    # re-check textless status / logos weekly
+DAYS_CONSIDERED_NEW          = 14
+NEW_CACHE_DURATION           = 1
+OLD_CACHE_DURATION           = 14
+TRENDING_CACHE_DURATION      = 1
+# Quality (AIOStreams) TTL — separate from rating TTL because stream availability
+# for older titles is very stable.  New content keeps the 1-day window so fresh
+# encodes are picked up quickly; old content is cached for much longer.
+QUALITY_OLD_CACHE_DURATION   = int(os.environ.get("QUALITY_OLD_CACHE_DURATION", "90"))   # days
+# Max concurrent background quality fetches.  Caps the burst when many uncached
+# titles scroll into view simultaneously so AIOStreams isn't overwhelmed.
+QUALITY_BG_CONCURRENCY       = int(os.environ.get("QUALITY_BG_CONCURRENCY", "5"))
+
+# Digital release (r/movieleaks) scraper settings
+DIGITAL_RELEASE_MIN_AGE_DAYS = 1    # ignore posts younger than this (mods still cleaning up)
+DIGITAL_RELEASE_MAX_AGE_DAYS = 30   # expire entries older than this from the cache
+
+# Composite poster cache TTL (seconds).
+# How long a fully composited poster is kept before being re-rendered.
+# Each unique combination of title + rendering parameters gets its own entry,
+# so changing settings immediately produces a fresh render on next request.
+# Override with COMPOSITE_CACHE_TTL=X in your .env file.
+COMPOSITE_CACHE_TTL        = int(os.environ.get("COMPOSITE_CACHE_TTL", "604800"))   # 7 days
+# Maximum number of composite cache entries. When exceeded the oldest entries are
+# evicted on each insert to keep the table at this size. 0 = no cap (rely on TTL alone).
+COMPOSITE_MAX_ENTRIES      = int(os.environ.get("COMPOSITE_MAX_ENTRIES", "0"))
+
+def _parse_bool_env(key: str, default: bool = False) -> bool:
+    val = os.environ.get(key, "").strip().lower()
+    if not val:
+        return default
+    return val not in ("0", "false", "no")
+
+# Rating Score Weight Defaults
+
+#  note to AI: do NOT remove the extras in this section that are set to 0. They are config options.
+
+MOVIE_WEIGHTS = {   # set weight of movie ranking providers, must sum to 1
+    "letterboxd":     0.8,
+    "trakt":          0,
+    "tomatoes":       0.2,
+    "popcorn":        0, # popcorn is the api response MDblist uses for tomatoes audience
+    "imdb":           0,
+    "metacritic":     0,
+    "metacriticuser": 0,
+    "tmdb":           0,
+    "rogerebert":     0,
+    "myanimelist":    0,
+}
+
+TV_WEIGHTS = {   # set weight of TV ranking providers, must sum to 1
+    "trakt":          0.8,
+    "tomatoes":       0.2,
+    "popcorn":        0,
+    "imdb":           0,
+    "metacritic":     0,
+    "metacriticuser": 0,
+    "tmdb":           0,
+    "myanimelist":    0,
+}
+
+# Map badge file names to strings (no need to touch)
+
+BADGE_FILES: dict[str, str] = {
+    "4K":     "4K",
+    "1080P":  "1080p",
+    "REMUX":  "Remux",
+    "WEBDL":  "Web",
+    "DV":     "DV",
+    "HDR10+": "HDR10+",
+    "HDR10":  "HDR10",
+}
+
+# Maps TMDB categories to numerics (no need to touch in most cases)
+
+GENRE_MAP = {
+    28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy",
+    80: "Crime", 99: "Documentary", 18: "Drama", 10751: "Family",
+    14: "Fantasy", 36: "History", 27: "Horror", 10402: "Music",
+    9648: "Mystery", 10749: "Romance", 878: "Sci-Fi", 53: "Thriller",
+    10752: "War", 37: "Western",
+    10759: "Action", 10762: "Kids", 10763: "News", 10764: "Reality",
+    10765: "Sci-Fi", 10766: "Soap", 10767: "Talk", 10768: "War",
+}
+
+# Can re-order to change the priority that genres appear with (reference genre map above)
+# Default Horror, Thriller, Mystery, Sci-Fi, Crime, Comedy, Fantasy, Adventure, Family, Action, History
+# Music, War, Western, Documentary, Drama, Adventure, Reality, Kids, News, Soap, Talk
+# Duplicate entries are not an accident, for certain genres TMDB uses two numbers, one for movies, one for shows.
+
+GENRE_PRIORITY = [
+    27, 53, 9648, 878, 10765, 80, 35, 10749, 14, 16, 10751,
+    28, 10759, 36, 10402, 10752, 10768, 37, 99, 18, 12,
+    10764, 10762, 10763, 10766, 10767,
+]
+
+# Text based fallback, not important if everything is working properly
+
+QUALITY_LABELS: dict[str, str] = {
+    "4K":     "4K",
+    "1080P":  "1080p",
+    "REMUX":  "Remux",
+    "WEBDL":  "Web",
+    "DV":     "DV",
+    "HDR10+": "HDR10+",
+    "HDR10":  "HDR10",
+    "ATMOS":  "Atmos",
+    "DTSX":   "DTS:X",
+}
+
+# Normalizes all scores to be out of 100
+
+SCORE_NORMALISERS = {
+    "imdb":           lambda v: (v / 10)  * 100,
+    "letterboxd":     lambda v: (v / 5)   * 100,
+    "trakt":          lambda v: v,
+    "tomatoes":       lambda v: v,
+    "popcorn":        lambda v: v,
+    "metacritic":     lambda v: v,
+    "metacriticuser": lambda v: (v / 10)  * 100,
+    "tmdb":           lambda v: v,
+    "rogerebert":      lambda v: (v / 4)   * 100,
+    "myanimelist":    lambda v: (v / 10)  * 100,
+}
+
+# Default Sash Priority
+
+SASH_PRIORITY: list[str] = [
+    "wins",
+    "pic_noms",
+    "festival",
+    "studio",
+    "director",
+    "cast",
+    "metacritic",
+    "cult",
+    "trending",
+    "true_story",
+    "foreign",
+    "structural",
+    "new_release",
+    "emmy_noms",
+]
