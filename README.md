@@ -7,22 +7,26 @@ Non self hosters can [visit the public instance.](https://postersplus.elfhosted.
 ---
 
 ## Showcase
-
-<!-- Add poster screenshots below. Recommended: 3-4 per row, use GitHub-hosted images -->
-<!-- Example row format:
 <p align="center">
-  <img src="url-to-image-1" width="23%"/>
-  <img src="url-to-image-2" width="23%"/>
-  <img src="url-to-image-3" width="23%"/>
-  <img src="url-to-image-4" width="23%"/>
+  <img src="https://github.com/UmbraProjects/PostersPlus/blob/main/Showcase/showcase-mode1.png?raw=true" width="23%"/>
+  <img src="https://github.com/UmbraProjects/PostersPlus/blob/main/Showcase/showcase-mode2.png?raw=true" width="23%"/>
+  <img src="https://github.com/UmbraProjects/PostersPlus/blob/main/Showcase/showcase-mode3.png?raw=true" width="23%"/>
+  <img src="https://github.com/UmbraProjects/PostersPlus/blob/main/Showcase/showcase-4.png?raw=true" width="23%"/>
 </p>
--->
+<p align="center">
+  Client featured is a slightly modified Stremio Kai by allecsc
+</p>
+<p align="center">
+  <img src="https://github.com/UmbraProjects/PostersPlus/blob/main/Showcase/showcase-kai.png?raw=true" width="92%"/>
+</p>
+</p>
 
 ---
 
 ## Features
 
-- **Ratings overlay** - weighted composite score from Letterboxd, Trakt, Rotten Tomatoes, IMDb, Metacritic, TMDb, MyAnimeList, and more. Three display modes: accent bar, numeric, and minimalist.
+- **Ratings overlay** - weighted composite score from Letterboxd, Trakt, Rotten Tomatoes, IMDb, Metacritic, TMDb, MyAnimeList, and more.
+- **Three display modes** - choose between a dynamic rating bar with text, pure text or minimalist which uses a small genre/year display with a dynamic rating separator based on the ratings.
 - **Award sashes** - Oscar Best Picture, Golden Globe (film and TV, five major categories), Emmy Outstanding Series (drama, comedy, limited), festival winners, custom cast, trending, newly streaming and more. Priority order is fully configurable.
 - **Quality badges** - 4K, 1080p, Remux, Web, DV, HDR10+, HDR10 sourced from an AIOStreams integration.
 - **Title logos** - TMDB logos composited over the poster with configurable size and position. Language-aware with English fallback.
@@ -31,13 +35,13 @@ Non self hosters can [visit the public instance.](https://postersplus.elfhosted.
 
 ---
 
-## Requirements
+## Self Hosted Requirements
 
 - Docker
-- A free [TMDB API key](https://www.themoviedb.org/settings/api) for posters, logos and metadata
+- A free [TMDB API key](https://www.themoviedb.org/settings/api) for posters, logos and metadata.
 - A free [MDBList API key](https://mdblist.com/) for ratings and keywords.
 - An [AIOMetadata](https://github.com/cedya77/aiometadata) config. Self hosted or public instance are both fine.
-- An [AIOStreams](https://github.com/Viren070/AIOStreams) self hosted instance *(optional, for quality badges)*
+- An [AIOStreams](https://github.com/Viren070/AIOStreams) self hosted instance, optionally used for quality badges.
 
 ---
 
@@ -46,7 +50,7 @@ Non self hosters can [visit the public instance.](https://postersplus.elfhosted.
 > **HTTPS is required for production use.**
 > Stremio addons like AIOMetadata are served over HTTPS. Browsers enforce mixed content blocking, meaning any poster URLs referenced by an HTTPS addon must also be HTTPS - HTTP image URLs will be silently blocked, including in Stremio's web client. You will need a reverse proxy with a valid SSL certificate in front of PostersPlus before using it with Stremio.
 >
-> Common options are [Traefik](https://traefik.io/) (widely used in the self-hosting community, particularly alongside AIOStreams and Authelia), [Caddy](https://caddyserver.com/) (handles Let's Encrypt automatically with minimal config), and Nginx with Certbot. Cloudflare proxying works too and pairs naturally with the `CDN_CACHE_TTL` option.
+> Good choices are [Traefik](https://traefik.io/) which has great support from Viren's templates or [Caddy](https://caddyserver.com/) which is very simple. 
 >
 > `http://localhost:8000` is only suitable for accessing the configurator locally during setup.
 
@@ -71,7 +75,7 @@ The service will be available at `http://localhost:8000`. Set up your reverse pr
 
 **4. Open the configurator**
 
-Navigate to `http://localhost:8000/configurator` to tune your settings and generate a URL template.
+Navigate to your domain to tune your settings and generate a URL template, the configurator is served at the base URL.
 
 ---
 
@@ -103,9 +107,6 @@ Posters are served at `/poster` with parameters controlling every aspect of rend
 ```
 https://yourdomain.com/poster?tmdb_id={tmdb_id}&imdb_id={imdb_id}&type={type}
 ```
-
-The web configurator at `/configurator` generates the full URL for you. For use with AIOMetadata, click the **Copy URL button** which uses `{tmdb_id}`, `{imdb_id}`, and `{type}` placeholders, don't use the direct image link.
-
 ---
 
 ## Award Sashes
@@ -165,4 +166,4 @@ PostersPlus uses a SQLite database (WAL mode) for all caching. The cache volume 
 
 ## License
 
-[GNU Affero General Public License v3.0](LICENSE)
+This project and any associated forks should remain open source under the [GNU Affero General Public License v3.0](LICENSE)
