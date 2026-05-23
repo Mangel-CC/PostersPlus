@@ -27,9 +27,14 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        # uid 568 matches the appuser baked into the Dockerfile (matches
+        # ElfHosted's per-app convention — see helmrelease-postersplus.yaml).
+        runAsUser: 568
+        runAsGroup: 568
+        # fsGroup ensures emptyDir + persistent volume mounts are
+        # group-writable by uid 568, so the read-only root filesystem
+        # still has writable /app/cache + /tmp/postersplus-prom + /tmp.
+        fsGroup: 568
         seccompProfile:
           type: RuntimeDefault
       containers:

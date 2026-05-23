@@ -44,14 +44,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # layout: bin/ lib/python3.11/site-packages/ etc.
 COPY --from=builder /install /usr/local
 
-RUN adduser --disabled-password --gecos '' appuser
+# Create appuser with explicit uid/gid 568. Numeric so Kubernetes
+# `runAsNonRoot` validation succeeds and matches ElfHosted's per-app
+# convention (see helmrelease-postersplus.yaml securityContext).
+RUN groupadd --gid 568 appuser \
+    && useradd --uid 568 --gid 568 --shell /bin/sh --create-home appuser
 
 # Copy app files and create cache dir while still root, then hand ownership over.
 COPY . .
 RUN mkdir -p /app/cache /app/cache/tmdb_posters /app/cache/tmdb_logos \
-    && chown -R appuser:appuser /app
+                /tmp/postersplus-prom \
+    && chown -R 568:568 /app /tmp/postersplus-prom
 
-USER appuser
+# Numeric so kubelet can verify runAsNonRoot without resolving /etc/passwd.
+USER 568
 
 # Healthcheck via curl is lighter than spawning python.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
