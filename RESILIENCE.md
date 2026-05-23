@@ -110,19 +110,57 @@ Namespaces are constants in `coordination/__init__.py` (`NS_RATING_BACKOFF`, `NS
 
 ## Phase 3 — Pluggable image-bytes store
 
-**Branch:** `phase-3-object-store`
-**Status:** pending
+**Branch:** `phase-3-blobstore`
+**Status:** implementation complete, codex review pending
 
-**Goal:** large bytes (composite JPEGs, downloaded TMDB posters/logos) optionally land in S3-compatible storage with a CDN URL returned to clients. Default stays local disk + SQLite blobs.
+**Scope (narrowed from original plan):**
 
-**Approach:**
+The original plan also moved the composite-poster JPEG bytes to object storage. That's deferred — the composite cache is bounded by `COMPOSITE_CACHE_TTL` and `COMPOSITE_MAX_ENTRIES` (set on hosted) and a CDN fronting `/poster` covers most read traffic anyway. The bigger blast-radius problem in Phase 3 is the TMDB poster/logo cache, which is currently filesystem-backed and doesn't survive horizontal scale.
 
-- New `BlobStore` protocol: `get(key) -> bytes | None`, `put(key, bytes, content_type)`, `url_for(key) -> str | None`.
-- Two impls: `LocalBlobStore` (current behaviour), `S3BlobStore` (via `aioboto3` or `obstore`).
-- `/poster` returns a 302 to `url_for(key)` when the backend offers one and `OBJECT_STORE_PUBLIC_URL` is configured; otherwise it serves bytes inline (current behaviour).
-- Composite cache table loses the `image_data` BLOB column for the S3 path — replaced by `blob_key`.
+Phase 3 moves TMDB poster + logo bytes to a `blobstore` package selected at import time by `OBJECT_STORE_URL`:
 
-**Acceptance:** with no extra env, identical to upstream; with S3 + CDN env, posters served from CDN with no app-CPU per request.
+- `blobstore/local.py` — filesystem (upstream default). Same `/app/cache/tmdb_posters` / `/app/cache/tmdb_logos` layout. I/O wrapped in `asyncio.to_thread` so disk reads don't block the event loop.
+- `blobstore/s3.py` — S3-compatible. Uses boto3 in thread-pool; works against AWS, Backblaze B2, Cloudflare R2, MinIO. Validates the bucket via `head_bucket` at startup so misconfiguration fails fast. Optional CDN URL via `OBJECT_STORE_PUBLIC_URL` (used by a future Phase 4 caller).
+
+**API:**
+
+- `async init()` / `async close()` — lifecycle wired into FastAPI lifespan.
+- `ping()` — sync probe for /ready (Phase 4).
+- `async get(bucket, key, max_age_seconds) -> bytes | None` — TTL-aware; stale entries are deleted lazily.
+- `async put(bucket, key, data, content_type=None)`.
+- `url_for(bucket, key) -> str | None` — CDN URL when configured (local backend always returns None).
+
+Bucket constants in `blobstore/__init__.py` (`BUCKET_TMDB_POSTERS`, `BUCKET_TMDB_LOGOS`).
+
+**Storage backend wiring:**
+
+- `storage/sqlite_backend.py` — FS-based poster/logo functions (and their `_safe_cache_path` / `_remove_if_dir` helpers) **removed**; replaced with async wrappers that call `blobstore.get` / `blobstore.put`. The `_POSTER_TTL_SECONDS` / `_LOGO_TTL_SECONDS` constants here pass the existing config TTLs through.
+- `storage/postgres_backend.py` — stops importing the FS helpers from `sqlite_backend.py`; has its own thin async wrappers identical in shape. Removes the cross-backend coupling that Phase 1 deliberately left in place as a stepping stone.
+- `tmdb.py` — 4 callsites add `await`:
+  - `await get_cached_tmdb_poster(...)` at line 212
+  - `await set_cached_tmdb_poster(...)` at line 231
+  - `await get_cached_tmdb_logo(...)` at line 274
+  - `await set_cached_tmdb_logo(...)` at line 295
+
+**Why poster/logo cache functions become async:**
+
+Upstream's sync API was fine for filesystem I/O on a local volume. Once the bytes might come from S3 (a network call of 10-300ms), running it under `asyncio.to_thread` from a sync function would block the event loop or require a clumsy wrapper at every call site. Making the four functions async is the cleanest path; the only caller (tmdb.py) is already inside async context so the diff is mechanical.
+
+For upstream cherry-pick: changes to upstream's `get_cached_tmdb_poster` etc. (in cache.py) need to be ported to `blobstore/local.py` (FS path) and `storage/{sqlite,postgres}_backend.py` (the async wrappers — usually unchanged unless TTL semantics shift).
+
+**Test results:**
+
+- Local mode: full round-trip on tmdb-posters + tmdb-logos via cache.py shim. Path-traversal rejection preserved. PASS.
+- S3 mode: round-trip against MinIO via boto3. Cross-client visibility verified (objects readable by a separate boto3 client). Stale-eviction via `LastModified` + max-age also works. PASS.
+- Image rebuild with `boto3>=1.34` added. Boots in three modes:
+  - `Blob store: local / Storage: sqlite / Coordinator: inprocess` — upstream default.
+  - `Blob store: s3 / Storage: sqlite / Coordinator: inprocess` — S3 only.
+  - Full hosted (s3 + postgres + redis) — implicitly works, all three selectors are independent.
+
+**Known follow-ups:**
+
+- Composite-poster bytes still in the relational DB. A future iteration can add a `composites` bucket if the DB-storage cost actually bites at scale.
+- `/poster` endpoint doesn't yet emit 302 redirects to `url_for(...)`; that wiring is Phase 4 territory (poster endpoint refactor for concurrency + redirects).
 
 ---
 
@@ -291,6 +329,14 @@ Post-review self-audit found one minor robustness issue (not flagged by Codex):
 - The `postgres://` URL scheme (Heroku/legacy alias) was accepted by the selector but psycopg3 only natively parses `postgresql://`. **Fixed:** selector now rewrites `postgres://` → `postgresql://` before the pool is opened.
 
 Phase 1 ready to merge once user signs and commits.
+
+### Phase 3 — reviewed
+
+Codex review (2026-05-23) found one P2 issue (now fixed):
+
+- **[P2]** `blobstore/s3.py` stale-eviction path returned without closing `resp["Body"]`, leaking the streaming body back to GC. Under sustained stale-traffic load this can exhaust the boto3 HTTP connection pool. **Fixed:** wrapped the read in `try/finally` so `body.close()` runs on every exit path (stale-skip and normal read).
+
+Phase 3 ready to merge once user signs and commits.
 
 ### Phase 2 — reviewed
 

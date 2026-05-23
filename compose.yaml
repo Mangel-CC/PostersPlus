@@ -35,6 +35,12 @@ services:
       # in-process default. The hosted profile provisions a local Redis.
       - REDIS_URL=${REDIS_URL:-}
       - REDIS_KEY_PREFIX=${REDIS_KEY_PREFIX:-postersplus}
+      # Phase 3: object-store backend for TMDB poster/logo bytes (opt-in).
+      # Leave OBJECT_STORE_URL unset to keep upstream's local filesystem path.
+      - OBJECT_STORE_URL=${OBJECT_STORE_URL:-}
+      - OBJECT_STORE_PUBLIC_URL=${OBJECT_STORE_PUBLIC_URL:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -71,6 +77,25 @@ services:
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Optional MinIO for hosted-mode blob storage (Phase 3). Provides an
+  # S3-compatible endpoint for dev. In production point OBJECT_STORE_URL at
+  # a real S3 (AWS / Backblaze B2 / Cloudflare R2 / etc.).
+  minio:
+    profiles: ["hosted"]
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: postersplus
+      MINIO_ROOT_PASSWORD: postersplus
+    volumes:
+      - ./postersplus-minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 3s
       retries: 5

@@ -42,6 +42,20 @@ DB_POOL_MAX_SIZE      = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))
 REDIS_URL             = os.environ.get("REDIS_URL", "").strip()
 REDIS_KEY_PREFIX      = os.environ.get("REDIS_KEY_PREFIX", "postersplus").strip() or "postersplus"
 
+# Hosted-mode blob store (ElfHosted fork — Phase 3).
+#
+# When OBJECT_STORE_URL is set, TMDB poster and logo bytes go to an
+# S3-compatible object store instead of the local filesystem. Unset (default)
+# preserves upstream behaviour. The composite poster cache (final_poster_cache
+# table) stays in the relational backend either way.
+#
+# URL format: s3://<bucket>?endpoint=<https://...>&region=<region>&prefix=<prefix>
+OBJECT_STORE_URL        = os.environ.get("OBJECT_STORE_URL", "").strip()
+# Optional CDN public URL — when set, hosted-mode storage backends can return
+# 302 redirects to the CDN for blob bytes instead of proxying them. Leaving
+# this unset is fine; bytes will be fetched server-side as needed.
+OBJECT_STORE_PUBLIC_URL = os.environ.get("OBJECT_STORE_PUBLIC_URL", "").strip()
+
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a
 # Cache-Control: public header so Cloudflare (or any CDN) caches them at the

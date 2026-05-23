@@ -150,6 +150,7 @@ from cache import (
     close as close_db,
 )
 from digital_release import digital_release_poll_loop
+import blobstore
 import config as _cfg
 import coordination as coord
 from discovery import (
@@ -655,6 +656,7 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info(f"Cache initialised (composite TTL {_cfg.COMPOSITE_CACHE_TTL}s / "
                 f"{_cfg.COMPOSITE_CACHE_TTL / 86400:.1f}d)")
+    await blobstore.init()
     await coord.init()
     _HTTP_CLIENT = _make_http_client()
     logger.info("HTTP client initialised")
@@ -668,6 +670,8 @@ async def lifespan(app: FastAPI):
     logger.info("HTTP client closed")
     await coord.close()
     logger.info("Coordinator closed")
+    await blobstore.close()
+    logger.info("Blob store closed")
     close_db()
     logger.info("Storage backend closed")
 

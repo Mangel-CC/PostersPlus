@@ -209,7 +209,7 @@ async def fetch_poster_image(
     alpha_composite throughout without mode-checking.
     """
     poster_cache_key = f"{media_type}_{tmdb_id}_{poster_path.strip('/')}"
-    cached_bytes = get_cached_tmdb_poster(poster_cache_key)
+    cached_bytes = await get_cached_tmdb_poster(poster_cache_key)
 
     if cached_bytes:
         logger.info(f"TMDB poster cache hit for {tmdb_id}")
@@ -228,7 +228,7 @@ async def fetch_poster_image(
     # Save as JPEG RGB (no alpha needed for base poster; restoring alpha on load is free)
     buf = io.BytesIO()
     image.convert("RGB").save(buf, format="JPEG", quality=92)
-    set_cached_tmdb_poster(poster_cache_key, buf.getvalue())
+    await set_cached_tmdb_poster(poster_cache_key, buf.getvalue())
 
     return image
 
@@ -271,7 +271,7 @@ async def fetch_logo(
     logo_path = candidates[0]["file_path"]
 
     logo_cache_key = logo_path.strip('/').replace('/', '_')
-    cached_bytes = get_cached_tmdb_logo(logo_cache_key)
+    cached_bytes = await get_cached_tmdb_logo(logo_cache_key)
 
     if cached_bytes:
         logger.info("TMDB logo cache hit")
@@ -292,7 +292,7 @@ async def fetch_logo(
 
     buf = io.BytesIO()
     logo.save(buf, format="PNG")
-    set_cached_tmdb_logo(logo_cache_key, buf.getvalue())
+    await set_cached_tmdb_logo(logo_cache_key, buf.getvalue())
 
     return logo
 

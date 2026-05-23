@@ -11,3 +11,7 @@ psycopg[binary,pool]>=3.1
 # Phase 2: Redis coordination (opt-in via REDIS_URL). The redis_backend module
 # is only imported when REDIS_URL is set, so the dependency is otherwise inert.
 redis>=5.0
+# Phase 3: S3-compatible blob store (opt-in via OBJECT_STORE_URL). The s3
+# backend module is only imported when OBJECT_STORE_URL is set, so this dep
+# is otherwise inert for SQLite/local users.
+boto3>=1.34

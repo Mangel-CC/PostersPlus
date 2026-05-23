@@ -1,10 +1,13 @@
-"""SQLite storage backend — extracted verbatim from upstream cache.py.
+"""SQLite storage backend — extracted from upstream cache.py.
 
-This module is the default backend and is the path used when DATABASE_URL is
-unset. It is kept as a near-verbatim copy of upstream's cache.py so cherry-picks
-from upstream apply with minimal friction.
+Default backend, used when DATABASE_URL is unset. Kept close to upstream's
+cache.py so cherry-picks from upstream apply with minimal friction.
+
+The TMDB poster/logo *bytes* are no longer handled here — Phase 3 moved them
+behind the ``blobstore`` package so they can be opt-in routed to S3. The
+poster/logo *cache functions* (get_cached_tmdb_poster etc.) remain as async
+wrappers that delegate to blobstore, preserving the public cache API.
 """
-import io
 import logging
 import os
 import sqlite3
@@ -15,6 +18,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+import blobstore
 from config import (
     DB_PATH,
     DAYS_CONSIDERED_NEW,
@@ -487,101 +491,31 @@ def set_cached_trending_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# Filesystem-backed TMDB poster/logo cache.
+# TMDB poster/logo bytes — delegated to the blobstore (Phase 3).
 #
-# These remain filesystem-backed on both SQLite and Postgres deployments
-# (Phase 3 moves them behind a BlobStore abstraction with S3 as opt-in).
-# Kept here so the SQLite backend is a single self-contained module that
-# matches upstream's behaviour exactly.
+# Filesystem behaviour for these is preserved by the default LocalBlobStore;
+# the S3 backend is opt-in via OBJECT_STORE_URL. These functions are async so
+# both backends share one call shape; callers in tmdb.py await them.
 # ---------------------------------------------------------------------------
 
-def _safe_cache_path(base_dir: str, filename: str) -> str:
-    path = os.path.realpath(os.path.join(base_dir, filename))
-    if not path.startswith(os.path.realpath(base_dir)):
-        raise ValueError(f"Path traversal attempt: {filename!r}")
-    return path
+_POSTER_TTL_SECONDS = TMDB_POSTER_CACHE_DURATION * 86400
+_LOGO_TTL_SECONDS   = TMDB_LOGO_CACHE_DURATION   * 86400
 
 
-def _remove_if_dir(path: str) -> bool:
-    if os.path.isdir(path):
-        try:
-            os.rmdir(path)
-            logger.info(f"Removed stale cache directory at {path}")
-        except OSError:
-            pass
-        return True
-    return False
+async def get_cached_tmdb_poster(cache_key: str) -> bytes | None:
+    return await blobstore.get(blobstore.BUCKET_TMDB_POSTERS, cache_key, _POSTER_TTL_SECONDS)
 
 
-def get_cached_tmdb_poster(cache_key: str) -> bytes | None:
-    path = _safe_cache_path(TMDB_POSTER_CACHE_DIR, cache_key)
-
-    if not os.path.exists(path):
-        return None
-
-    age_days = (time.time() - os.path.getmtime(path)) / 86400
-
-    if age_days > TMDB_POSTER_CACHE_DURATION:
-        logger.info(f"TMDB poster cache expired for {cache_key}")
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-        return None
-
-    try:
-        with open(path, "rb") as f:
-            return f.read()
-    except Exception as exc:
-        logger.error(f"TMDB poster cache read error: {exc}")
-        return None
+async def set_cached_tmdb_poster(cache_key: str, data: bytes) -> None:
+    await blobstore.put(blobstore.BUCKET_TMDB_POSTERS, cache_key, data, content_type="image/jpeg")
 
 
-def set_cached_tmdb_poster(cache_key: str, data: bytes) -> None:
-    try:
-        path = _safe_cache_path(TMDB_POSTER_CACHE_DIR, cache_key)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(data)
-    except Exception as exc:
-        logger.error(f"TMDB poster cache write error: {exc}")
+async def get_cached_tmdb_logo(cache_key: str) -> bytes | None:
+    return await blobstore.get(blobstore.BUCKET_TMDB_LOGOS, cache_key, _LOGO_TTL_SECONDS)
 
 
-def get_cached_tmdb_logo(cache_key: str) -> bytes | None:
-    path = _safe_cache_path(TMDB_LOGO_CACHE_DIR, cache_key)
-
-    if _remove_if_dir(path):
-        return None
-
-    if not os.path.exists(path):
-        return None
-
-    age_days = (time.time() - os.path.getmtime(path)) / 86400
-
-    if age_days > TMDB_LOGO_CACHE_DURATION:
-        logger.info(f"TMDB logo cache expired for {cache_key}")
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-        return None
-
-    try:
-        with open(path, "rb") as f:
-            return f.read()
-    except Exception as exc:
-        logger.error(f"TMDB logo cache read error: {exc}")
-        return None
-
-
-def set_cached_tmdb_logo(cache_key: str, data: bytes) -> None:
-    try:
-        path = _safe_cache_path(TMDB_LOGO_CACHE_DIR, cache_key)
-        _remove_if_dir(path)
-        with open(path, "wb") as f:
-            f.write(data)
-    except Exception as exc:
-        logger.error(f"TMDB logo cache write error: {exc}")
+async def set_cached_tmdb_logo(cache_key: str, data: bytes) -> None:
+    await blobstore.put(blobstore.BUCKET_TMDB_LOGOS, cache_key, data, content_type="image/png")
 
 
 def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
