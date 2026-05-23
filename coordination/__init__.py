@@ -27,6 +27,7 @@ _PUBLIC_API = (
     "try_acquire_lease",
     "refresh_lease",
     "release_lease",
+    "check_rate_limit",
     "prune_expired",
 )
 

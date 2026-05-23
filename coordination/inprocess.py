@@ -32,6 +32,7 @@ async def close() -> None:
     _backoff.clear()
     _inflight.clear()
     _leases.clear()
+    _rl_buckets.clear()
 
 
 def ping() -> bool:
@@ -120,19 +121,58 @@ async def release_lease(name: str, token: str) -> None:
         _leases.pop(name, None)
 
 
+# ---------------------------------------------------------------------------
+# Per-tenant rate limit (fixed window, 1-second buckets).
+#
+# Returns (allowed, retry_after_seconds). retry_after is wall-clock seconds
+# until the current window rolls over, clamped to 1.
+# ---------------------------------------------------------------------------
+
+_rl_buckets: dict[str, tuple[int, int]] = {}   # tenant -> (window_start_epoch, count)
+
+
+async def check_rate_limit(tenant: str, rps: int) -> tuple[bool, int]:
+    if rps <= 0:
+        return True, 0
+    import time as _t
+    now = int(_t.time())
+    # Opportunistic cleanup of stale buckets so an attacker spamming unique
+    # tmdb_key values can't grow the dict unbounded. Triggered when the
+    # bucket count exceeds a soft cap; bounded O(n) sweep that drops every
+    # bucket whose window has already rolled over.
+    if len(_rl_buckets) > 1024:
+        stale = [k for k, (w, _c) in _rl_buckets.items() if w != now]
+        for k in stale:
+            _rl_buckets.pop(k, None)
+    window, count = _rl_buckets.get(tenant, (now, 0))
+    if now != window:
+        # Reset; new window started.
+        _rl_buckets[tenant] = (now, 1)
+        return True, 0
+    if count >= rps:
+        return False, 1
+    _rl_buckets[tenant] = (window, count + 1)
+    return True, 0
+
+
 async def prune_expired() -> None:
     """Best-effort cleanup of expired keys. Cheap on the in-process backend;
     the cache-prune loop calls this periodically. Redis backend has no-op
     because the server expires keys for us."""
+    import time as _t
     now = asyncio.get_running_loop().time()
+    wall_now = int(_t.time())
     expired_backoff = [k for k, v in _backoff.items() if v <= now]
     for k in expired_backoff:
         _backoff.pop(k, None)
     expired_inflight = [k for k, v in _inflight.items() if v <= now]
     for k in expired_inflight:
         _inflight.pop(k, None)
-    if expired_backoff or expired_inflight:
+    expired_rl = [k for k, (w, _c) in _rl_buckets.items() if w != wall_now]
+    for k in expired_rl:
+        _rl_buckets.pop(k, None)
+    if expired_backoff or expired_inflight or expired_rl:
         logger.debug(
-            "Coordinator prune: %d backoff, %d inflight",
-            len(expired_backoff), len(expired_inflight),
+            "Coordinator prune: %d backoff, %d inflight, %d rate-limit",
+            len(expired_backoff), len(expired_inflight), len(expired_rl),
         )

@@ -79,6 +79,12 @@ METRICS_ACCESS_KEY      = os.environ.get("METRICS_ACCESS_KEY", "").strip()
 # (upstream behaviour).
 LOG_FORMAT              = os.environ.get("LOG_FORMAT", "text").strip().lower()
 
+# Per-tenant rate limit (ElfHosted fork — Phase 8).
+# Maximum /poster requests per tenant per second. 0 disables the limit
+# (upstream behaviour). Tenant identity is sha256(user-key)[:16] when users
+# supply their own TMDB/MDBList key; otherwise "operator".
+RATE_LIMIT_RPS          = int(os.environ.get("RATE_LIMIT_RPS", "0"))
+
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a
 # Cache-Control: public header so Cloudflare (or any CDN) caches them at the

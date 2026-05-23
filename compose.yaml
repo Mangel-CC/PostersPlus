@@ -47,6 +47,8 @@ services:
       # Phase 6: observability.
       - METRICS_ACCESS_KEY=${METRICS_ACCESS_KEY:-}
       - LOG_FORMAT=${LOG_FORMAT:-text}
+      # Phase 8: per-tenant rate limit on /poster. 0 = unlimited.
+      - RATE_LIMIT_RPS=${RATE_LIMIT_RPS:-0}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
