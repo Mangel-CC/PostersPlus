@@ -128,6 +128,8 @@ def draw_score_bar(
     glow_blur: int = SCORE_GLOW_BLUR,
     glow_alpha: int = SCORE_GLOW_ALPHA,
 ) -> None:
+    if score is None:
+        return
     if isinstance(score, str):
         try:
             score = int(score)
@@ -220,6 +222,8 @@ def draw_score_bar_vertical(
     height: int = 36,
     width: int = 4,
 ) -> None:
+    if score is None:
+        return
     if isinstance(score, str):
         try:
             score = int(score)
