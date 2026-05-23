@@ -78,12 +78,13 @@ _render_inflight: dict[str, "asyncio.Future[bytes]"] = {}
 # immediately without quality badges on a cache miss; the next request for the
 # same title will find the quality cached and render badges normally.
 #
-# _quality_bg_inflight: tracks imdb_ids with an active background fetch so
-#   scroll bursts don't launch duplicate fetches for the same title.
+# Background-fetch single-flight (so scroll bursts don't launch duplicate
+# fetches for the same title) is delegated to the coordination layer — the
+# default in-process backend uses a set under the hood; the Redis backend
+# shares the claim across replicas.
 # _quality_bg_semaphore: caps concurrent AIOStreams calls so a large burst
 #   doesn't hammer the scrapers with hundreds of simultaneous requests.
 
-_quality_bg_inflight: set[str] = set()
 _quality_bg_semaphore: "asyncio.Semaphore | None" = None   # created inside event loop
 
 # ---------------------------------------------------------------------------
@@ -97,12 +98,15 @@ _quality_bg_semaphore: "asyncio.Semaphore | None" = None   # created inside even
 #
 # _rating_fetch_inflight: maps imdb_id -> asyncio.Event that fires once the
 #   first fetch completes.  Subsequent requests wait, then re-read the DB.
-# _rating_backoff: maps imdb_id -> loop-time after which a new attempt is
-#   allowed.  Set to now+3600 after a confirmed FETCH_FAILED so MDBlist
-#   isn't hammered while it's degraded.
+# Inherently per-process (asyncio.Event isn't shareable across replicas);
+# cross-replica deduplication is approximated via the shared rating cache
+# plus the shared backoff in the coordination layer.
+#
+# Backoff (rate-limit / FETCH_FAILED suppression) is delegated to the
+# coordination layer so a 429 from MDBList throttles every replica, not just
+# the one that hit it first.
 
 _rating_fetch_inflight: dict[str, asyncio.Event] = {}
-_rating_backoff:        dict[str, float]          = {}  # imdb_id -> retry-after (loop time)
 
 
 async def _background_quality_fetch(
@@ -128,7 +132,7 @@ async def _background_quality_fetch(
     except Exception as exc:
         logger.warning(f"Background quality fetch failed for {imdb_id}: {exc}")
     finally:
-        _quality_bg_inflight.discard(imdb_id)
+        await coord.release_inflight(coord.NS_QUALITY_BG, imdb_id)
 
 # Local imports
 from age_badge import draw_quality_age_badge
@@ -147,6 +151,7 @@ from cache import (
 )
 from digital_release import digital_release_poll_loop
 import config as _cfg
+import coordination as coord
 from discovery import (
     ALL_PRIORITY_SLOTS,
     FESTIVAL_KEYWORDS,
@@ -645,15 +650,10 @@ async def _cache_prune_loop() -> None:
         logger.info("Running scheduled cache prune")
         await asyncio.get_running_loop().run_in_executor(None, prune_caches)
 
-        # Evict expired entries from the in-process rating backoff dict.
-        # Entries are also removed lazily on access, but titles that are never
-        # re-requested would otherwise accumulate indefinitely.
-        _now = asyncio.get_running_loop().time()
-        expired = [k for k, v in _rating_backoff.items() if v <= _now]
-        for k in expired:
-            del _rating_backoff[k]
-        if expired:
-            logger.debug(f"Pruned {len(expired)} expired rating backoff entries")
+        # Coordinator-managed state (rating backoff, bg-fetch claims). On the
+        # in-process backend this evicts expired entries from per-worker dicts;
+        # on the Redis backend it's a no-op because Redis expires keys itself.
+        await coord.prune_expired()
 
         await asyncio.sleep(6 * 3600)   # every 6 hours
 
@@ -664,6 +664,7 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info(f"Cache initialised (composite TTL {_cfg.COMPOSITE_CACHE_TTL}s / "
                 f"{_cfg.COMPOSITE_CACHE_TTL / 86400:.1f}d)")
+    await coord.init()
     _HTTP_CLIENT = _make_http_client()
     logger.info("HTTP client initialised")
     _configurator_html = _load_configurator_html()
@@ -674,6 +675,8 @@ async def lifespan(app: FastAPI):
     digital_task.cancel()
     await _HTTP_CLIENT.aclose()
     logger.info("HTTP client closed")
+    await coord.close()
+    logger.info("Coordinator closed")
     close_db()
     logger.info("Storage backend closed")
 
@@ -966,14 +969,9 @@ async def get_poster(
     _rating_event_to_set: asyncio.Event | None = None
 
     if not rating_already_cached and effective_mdblist_key:
-        _loop_now = asyncio.get_running_loop().time()
-        _backoff_until = _rating_backoff.get(imdb_id)
-        if _backoff_until is not None:
-            if _loop_now < _backoff_until:
-                logger.debug(f"Rating fetch for {imdb_id} skipped (MDBlist back-off active)")
-                effective_mdblist_key = None   # treat as no-key; serve without rating
-            else:
-                del _rating_backoff[imdb_id]   # expired — allow a fresh attempt
+        if await coord.is_backoff_active(coord.NS_RATING_BACKOFF, imdb_id):
+            logger.debug(f"Rating fetch for {imdb_id} skipped (MDBlist back-off active)")
+            effective_mdblist_key = None   # treat as no-key; serve without rating
 
     if not rating_already_cached and effective_mdblist_key:
         _inflight_event = _rating_fetch_inflight.get(imdb_id)
@@ -1001,9 +999,7 @@ async def get_poster(
                 logger.info(f"Rating coalesce succeeded for {imdb_id} — using cached result")
             else:
                 # The other fetch also failed; re-check back-off it may have set.
-                _loop_now2    = asyncio.get_running_loop().time()
-                _backoff_now2 = _rating_backoff.get(imdb_id)
-                if _backoff_now2 is not None and _loop_now2 < _backoff_now2:
+                if await coord.is_backoff_active(coord.NS_RATING_BACKOFF, imdb_id):
                     logger.debug(
                         f"Rating fetch for {imdb_id} suppressed after coalescence (back-off active)"
                     )
@@ -1031,8 +1027,7 @@ async def get_poster(
     # immediately without badges.  The cache will be warm on the next request.
     quality_pending = False
     if quality_needs_fetch:
-        if imdb_id not in _quality_bg_inflight:
-            _quality_bg_inflight.add(imdb_id)
+        if await coord.claim_inflight(coord.NS_QUALITY_BG, imdb_id, ttl_seconds=300.0):
             asyncio.create_task(
                 _background_quality_fetch(
                     imdb_id, type, season, episode,
@@ -1100,7 +1095,7 @@ async def get_poster(
 
         if rating_failed:
             logger.warning(f"Rating fetch failed for {imdb_id} after retry — skipping rating cache")
-            _rating_backoff[imdb_id] = asyncio.get_running_loop().time() + 3600
+            await coord.set_backoff(coord.NS_RATING_BACKOFF, imdb_id, ttl_seconds=3600.0)
             logger.info(f"MDBlist back-off set for {imdb_id} (1 hour)")
             ratings_dict   = {}
             genre          = cached_genre or "Unknown"

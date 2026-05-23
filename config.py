@@ -33,6 +33,15 @@ DATABASE_URL          = os.environ.get("DATABASE_URL", "").strip()
 DB_POOL_MIN_SIZE      = int(os.environ.get("DB_POOL_MIN_SIZE", "1"))
 DB_POOL_MAX_SIZE      = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))
 
+# Hosted-mode coordination backend (ElfHosted fork — Phase 2).
+#
+# When REDIS_URL is set, MDBList rate-limit backoff and background-quality
+# fetch claims are stored in Redis so multiple replicas share state. Unset
+# (default) keeps per-process dicts — identical to upstream. Render
+# coalescing remains per-process either way.
+REDIS_URL             = os.environ.get("REDIS_URL", "").strip()
+REDIS_KEY_PREFIX      = os.environ.get("REDIS_KEY_PREFIX", "postersplus").strip() or "postersplus"
+
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a
 # Cache-Control: public header so Cloudflare (or any CDN) caches them at the

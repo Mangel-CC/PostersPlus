@@ -1,0 +1,63 @@
+"""Coordination backend selector.
+
+Active backend is chosen at import time by config.REDIS_URL:
+
+  * unset / empty → coordination.inprocess (upstream default)
+  * redis:// or rediss:// → coordination.redis_backend (opt-in)
+
+main.py uses the re-exported async functions; the call shape is identical for
+both backends so a private deployment and a multi-replica hosted deployment
+share the same code paths.
+"""
+import logging
+
+from config import REDIS_URL
+
+logger = logging.getLogger(__name__)
+
+_PUBLIC_API = (
+    "init",
+    "close",
+    "ping",
+    "is_backoff_active",
+    "set_backoff",
+    "clear_backoff",
+    "claim_inflight",
+    "release_inflight",
+    "prune_expired",
+)
+
+
+def _select_backend():
+    """Return the active backend module. The redis backend is lazy-imported so
+    SQLite-only / inprocess-only deployments don't need the redis dep loaded."""
+    url = (REDIS_URL or "").strip()
+    if url:
+        if url.startswith(("redis://", "rediss://", "unix://")):
+            from coordination import redis_backend
+            logger.info("Coordinator backend: redis (REDIS_URL detected)")
+            return redis_backend
+        raise RuntimeError(
+            f"Unsupported REDIS_URL scheme: {url.split('://', 1)[0]!r}. "
+            "Set a redis:// / rediss:// / unix:// URL or unset REDIS_URL "
+            "to use the in-process coordinator."
+        )
+    from coordination import inprocess
+    logger.info("Coordinator backend: inprocess (default)")
+    return inprocess
+
+
+_backend = _select_backend()
+
+for _name in _PUBLIC_API:
+    globals()[_name] = getattr(_backend, _name)
+
+BACKEND_KIND: str = "redis" if _backend.__name__.endswith("redis_backend") else "inprocess"
+
+__all__ = list(_PUBLIC_API) + ["BACKEND_KIND"]
+
+
+# Namespace constants — single source of truth so a typo doesn't silently
+# create a parallel keyspace. Add new entries here.
+NS_RATING_BACKOFF: str = "rating-backoff"
+NS_QUALITY_BG: str     = "quality-bg-inflight"

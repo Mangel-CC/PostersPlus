@@ -8,3 +8,6 @@ numpy
 # (Postgres) modes without rebuilds. The postgres_backend module is only
 # imported when DATABASE_URL is set, so the dependency is otherwise inert.
 psycopg[binary,pool]>=3.1
+# Phase 2: Redis coordination (opt-in via REDIS_URL). The redis_backend module
+# is only imported when REDIS_URL is set, so the dependency is otherwise inert.
+redis>=5.0
