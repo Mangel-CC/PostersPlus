@@ -15,12 +15,32 @@ from fastapi.responses import Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, ImageFont
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    force=True,
-)
+_LOG_FORMAT_ENV = os.environ.get("LOG_FORMAT", "text").strip().lower()
+if _LOG_FORMAT_ENV == "json":
+    # Structured JSON logs for hosted-mode log aggregation. Falls back to
+    # text format if python-json-logger isn't installed (which only happens
+    # if someone strips the dep from requirements).
+    try:
+        from pythonjsonlogger import jsonlogger
+        _json_handler = logging.StreamHandler()
+        _json_handler.setFormatter(jsonlogger.JsonFormatter(
+            "%(asctime)s %(levelname)s %(name)s %(message)s",
+        ))
+        logging.basicConfig(level=logging.INFO, handlers=[_json_handler], force=True)
+    except ImportError:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+            force=True,
+        )
+else:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+    )
 # Pull uvicorn's loggers into our root handler so all output shares the same format.
 for _uv_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
     _uv_logger = logging.getLogger(_uv_name)
@@ -163,6 +183,7 @@ from digital_release import digital_release_poll_loop
 import blobstore
 import config as _cfg
 import coordination as coord
+import metrics as _metrics
 from discovery import (
     ALL_PRIORITY_SLOTS,
     FESTIVAL_KEYWORDS,
@@ -714,6 +735,13 @@ async def lifespan(app: FastAPI):
                 f"{_cfg.COMPOSITE_CACHE_TTL / 86400:.1f}d)")
     await blobstore.init()
     await coord.init()
+    # Label the backend selection so Prometheus dashboards can group by mode.
+    import cache as _cache_mod
+    _metrics.backend_info.labels(
+        storage=_cache_mod.BACKEND_KIND,
+        coordinator=coord.BACKEND_KIND,
+        blobstore=blobstore.BACKEND_KIND,
+    ).set(1)
     _HTTP_CLIENT = _make_http_client()
     logger.info("HTTP client initialised")
     _configurator_html = _load_configurator_html()
@@ -784,6 +812,31 @@ def _load_configurator_html() -> str:
             return f.read()
     except FileNotFoundError:
         return "<h1>Configurator not found</h1><p>Place configurator.html alongside main.py</p>"
+
+
+@app.get("/metrics")
+async def metrics_endpoint(access_key: str = ""):
+    """Prometheus exposition. Optional shared-secret guard via METRICS_ACCESS_KEY.
+
+    Note: the binding doesn't separate ports — operators wanting strict
+    metrics isolation should bind a sidecar at the ingress level. The
+    shared-secret guard is a defence-in-depth when /metrics is publicly
+    reachable.
+    """
+    if _cfg.METRICS_ACCESS_KEY and not hmac.compare_digest(access_key, _cfg.METRICS_ACCESS_KEY):
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, CollectorRegistry
+    if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        # Aggregate counters/histograms across all uvicorn worker processes
+        # so a scrape always reflects the whole replica's traffic, not just
+        # whichever worker happened to handle it.
+        from prometheus_client import multiprocess
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        payload = generate_latest(registry)
+    else:
+        payload = generate_latest()
+    return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/health")
@@ -1336,6 +1389,7 @@ async def get_poster(
             else:
                 await _render_semaphore.acquire()
         except asyncio.TimeoutError:
+            _metrics.render_saturated_total.inc()
             logger.warning(
                 f"Render queue saturated (cap={_cfg.RENDER_CONCURRENCY}); "
                 f"returning 503 for tmdb_id={tmdb_id}"
@@ -1348,10 +1402,13 @@ async def get_poster(
                 headers={"Retry-After": "5"},
             )
         try:
-            img_bytes = await asyncio.get_running_loop().run_in_executor(
-                None, _composite_and_encode
-            )
+            _metrics.render_inflight.inc()
+            with _metrics.render_duration_seconds.time():
+                img_bytes = await asyncio.get_running_loop().run_in_executor(
+                    None, _composite_and_encode
+                )
         finally:
+            _metrics.render_inflight.dec()
             _render_semaphore.release()
 
         # Persist the finished poster so future requests skip the pipeline.

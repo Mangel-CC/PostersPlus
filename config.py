@@ -69,6 +69,16 @@ RENDER_CONCURRENCY      = int(os.environ.get("RENDER_CONCURRENCY", "0")) or (os.
 # signal to back off when the server is saturated.
 RENDER_QUEUE_TIMEOUT    = float(os.environ.get("RENDER_QUEUE_TIMEOUT", "30"))
 
+# Hosted-mode observability (ElfHosted fork — Phase 6).
+#
+# Optional shared secret guarding /metrics. Unset (default) leaves /metrics
+# open; operators should bind the app behind an ingress that gates it.
+METRICS_ACCESS_KEY      = os.environ.get("METRICS_ACCESS_KEY", "").strip()
+# When LOG_FORMAT=json, logs become structured JSON lines (one object per
+# record). Useful when shipping to Loki/Elasticsearch. Default = text
+# (upstream behaviour).
+LOG_FORMAT              = os.environ.get("LOG_FORMAT", "text").strip().lower()
+
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a
 # Cache-Control: public header so Cloudflare (or any CDN) caches them at the

@@ -44,6 +44,9 @@ services:
       # Phase 4: render concurrency cap + queue timeout.
       - RENDER_CONCURRENCY=${RENDER_CONCURRENCY:-0}
       - RENDER_QUEUE_TIMEOUT=${RENDER_QUEUE_TIMEOUT:-30}
+      # Phase 6: observability.
+      - METRICS_ACCESS_KEY=${METRICS_ACCESS_KEY:-}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
