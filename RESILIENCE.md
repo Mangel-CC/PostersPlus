@@ -363,22 +363,59 @@ This means tenants who bring their own keys throttle themselves without affectin
 ## Phase 9 — Image hardening, secrets, k8s manifests
 
 **Branch:** `phase-9-deploy`
-**Status:** pending
+**Status:** implementation complete, codex review pending
 
-**Goal:** production-grade container image and Kubernetes manifests.
+**Dockerfile (multi-stage):**
 
-**Approach:**
+- Builder stage installs `build-essential` and runs `pip install --prefix=/install`.
+- Final stage is `python:3.11-slim` pinned to a specific digest, no compiler toolchain, with only `curl` + `ca-certificates` for the healthcheck and TLS.
+- Image size cut from **913 MB → 479 MB** (≈48% reduction) by dropping `build-essential` from the runtime.
+- `HEALTHCHECK` baked into the image so operators running raw `docker run` get the healthcheck without compose.
 
-- Multi-stage Dockerfile: builder installs wheels, final image is `python:3.11-slim` (or distroless) without `build-essential`. Pin base image digest.
-- `requirements.txt` pinned with hashes (`pip-compile --generate-hashes`).
-- Compose hardening: `read_only: true`, `tmpfs: [/tmp]`, `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, non-root user (already done).
-- Minimal Helm chart or kustomize base under `deploy/k8s/`:
-  - Deployment + HPA + PDB
-  - ConfigMap (non-secret env) + ExternalSecret (or SealedSecret) for keys
-  - Service + (optional) Ingress
-  - NetworkPolicy: egress allowlist to TMDB/MDBList/AIOStreams/S3 endpoints only
+**Compose hardening:**
 
-**Acceptance:** `helm install` (or `kubectl apply -k`) brings up a working hosted instance against external Postgres + Redis + S3.
+- `read_only: true` + `tmpfs: [/tmp, /tmp/postersplus-prom]` — root filesystem is immutable; writable areas explicit.
+- `cap_drop: [ALL]` + `security_opt: [no-new-privileges:true]`.
+- `image: postersplus` (lowercased — upstream's "PostersPlus" trips modern Docker).
+- Verified: `docker compose up` boots cleanly; `/live` returns 200; no writes blocked by the read-only FS.
+
+**`requirements.txt`:**
+
+- Upstream's unpinned dependency list is left as-is (still floating versions) so cherry-picks from upstream apply cleanly. Operators wanting reproducible builds can run `pip-compile --generate-hashes` against this file and commit the lock alongside; this fork ships the loose list to minimise upstream drift.
+
+**Kubernetes manifests (`deploy/k8s/`):**
+
+```text
+deploy/k8s/
+├── kustomization.yaml      # bundles everything
+├── namespace.yaml
+├── configmap.yaml          # backend URLs, RPS, log format, etc.
+├── secret.yaml             # placeholder (replace with ExternalSecret/SealedSecret in prod)
+├── deployment.yaml         # 2 replicas, hardened SecurityContext, /live + /ready probes
+├── service.yaml            # ClusterIP on 8000
+├── hpa.yaml                # 2–10 replicas; CPU 70% / mem 80% targets
+├── pdb.yaml                # minAvailable: 1
+├── networkpolicy.yaml      # in-namespace + 443 egress
+└── README.md               # usage, secrets, FQDN-policy notes
+```
+
+Highlights:
+
+- **SecurityContext**: `runAsNonRoot`, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, `capabilities.drop: ALL`, `allowPrivilegeEscalation: false`.
+- **Probes**: `/live` for liveness (cheap), `/ready` for readiness with backend checks (Phase 4).
+- **Multiproc Prometheus**: `emptyDir` mounted at `/tmp/postersplus-prom` matches `entrypoint.sh`'s default. Works with the Deployment's default `WORKERS=2`.
+- **HPA**: CPU + memory triggers; can be switched to a custom metric (e.g., `postersplus_render_inflight`) via KEDA / Prometheus adapter if needed.
+- **NetworkPolicy**: vanilla Kubernetes can't FQDN-match, so the included policy is permissive on `:443` egress. The README points operators at Cilium / Calico Enterprise for strict FQDN allowlisting.
+
+**Verified:**
+
+- `docker build` succeeds; image is half the previous size; `docker run` boots cleanly.
+- `docker compose up` works with the new hardening (`read_only: true` doesn't break the app — all writes are scoped to `/app/cache` or `/tmp`).
+- `kubectl kustomize deploy/k8s/` renders correctly; NetworkPolicy peer selectors stay scoped to their targets (kube-dns, postgres, redis) without app-label pollution.
+
+**Codex review (2026-05-23):** 1 P1 found and fixed.
+
+- **[P1]** `commonLabels: app.kubernetes.io/name: postersplus` in `kustomization.yaml` was injecting that label into every selector — including the NetworkPolicy egress peer selectors. The rendered DNS peer became `k8s-app: kube-dns AND app.kubernetes.io/name: postersplus` (matches nothing), and the Postgres/Redis peers became `app.kubernetes.io/name: postgres AND … postersplus` (also matches nothing). Pods would have been unable to resolve DNS or reach either backend. **Fixed:** removed `commonLabels` entirely; the labels we need are already declared directly on each resource's `spec.selector.matchLabels` / `template.metadata.labels`. Verified via `kubectl kustomize` — peer selectors now render clean.
 
 ---
 

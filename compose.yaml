@@ -3,10 +3,23 @@ services:
     build:
       context: .
       dockerfile: ./dockerfile
-    image: PostersPlus
+    # Modern Docker requires lowercase image names. (Upstream uses
+    # "PostersPlus"; we keep the build but rename the local tag.)
+    image: postersplus
     ports:
       - "8000:8000"
     restart: unless-stopped
+    # Phase 9 hardening: drop all Linux capabilities the app doesn't need,
+    # disallow privilege escalation, run with a read-only root filesystem
+    # backed by a tmpfs for the prometheus multiproc dir + /tmp.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64M
+      - /tmp/postersplus-prom:rw,noexec,nosuid,size=16M
     volumes:
       - ./postersplus-cache:/app/cache  # cache DB, TMDB posters/logos, discovery_overrides.json
     env_file:
