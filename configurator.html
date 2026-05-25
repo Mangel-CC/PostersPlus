@@ -127,7 +127,12 @@
     color: inherit;
   }
   .header-right:hover .hosted-by-brand { color: var(--gold-bright); }
-  .header-right svg { display: block; }
+  .header-right .hosted-by-logo {
+    display: block;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 auto;
+  }
   .hosted-by-label {
     font-family: var(--mono);
     font-size: 9px;
@@ -1317,18 +1322,16 @@
       </div>
     </div>
 
-    <!-- ElfHosted brand block — replace the inline <svg> below with the
-         real ElfHosted logo when you have it. Keeping it inline (rather
-         than referencing /static/) so the configurator stays a single
-         self-contained file. -->
+    <!-- ElfHosted brand block. Logo is referenced by URL (rather than
+         inlined) because the canonical SVG ships ~39KB of Inkscape
+         metadata. Loading it from docs.elfhosted.com keeps the
+         configurator HTML small and lets the asset evolve without a
+         redeploy here. -->
     <a class="header-right" href="https://elfhosted.com" target="_blank" rel="noopener noreferrer">
-      <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <!-- placeholder mark: stylised "elf hat" silhouette. Swap for the
-             real logo SVG when ready. -->
-        <path d="M18 4 L8 26 L28 26 Z" stroke="#c9a14a" stroke-width="1.4" fill="none"/>
-        <circle cx="18" cy="30" r="2" fill="#e6c068"/>
-        <path d="M14 26 H22" stroke="#c9a14a" stroke-width="1.4" stroke-linecap="round"/>
-      </svg>
+      <img class="hosted-by-logo"
+           src="https://docs.elfhosted.com/images/logo.svg"
+           alt="ElfHosted"
+           width="36" height="36">
       <div>
         <div class="hosted-by-label">Hosted by</div>
         <div class="hosted-by-brand">ElfHosted</div>
