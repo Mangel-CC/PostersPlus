@@ -945,16 +945,22 @@
   .url-param-val { color: var(--silver); }
   .url-placeholder { color: var(--gold-dim); }
 
-  /* ── PRESET-ONLY LOCK ── */
+  /* ── PRESET-ONLY LOCK ── horizontal banner between header + layout */
   .lock-banner {
     display: none;
-    margin: 14px 16px 18px;
-    padding: 14px 16px;
+    margin: 0 0 20px;
+    padding: 12px 18px;
     background: var(--black);
     border: 1px solid var(--gold-dim);
     border-left: 3px solid var(--gold);
+    gap: 18px;
+    align-items: center;
   }
-  body.preset-only-mode .lock-banner { display: block; }
+  body.preset-only-mode .lock-banner { display: flex; }
+  .lock-banner-text {
+    flex: 1 1 0;
+    min-width: 240px;
+  }
   .lock-banner-title {
     font-family: var(--mono);
     font-size: 9px;
@@ -962,27 +968,25 @@
     letter-spacing: 0.28em;
     text-transform: uppercase;
     color: var(--gold);
-    margin-bottom: 8px;
+    margin-bottom: 4px;
   }
   .lock-banner-body {
     font-family: var(--mono);
     font-size: 10px;
-    line-height: 1.55;
+    line-height: 1.5;
     color: var(--silver-dim);
-    margin-bottom: 12px;
   }
   .lock-banner-cta-row {
     display: flex;
     gap: 8px;
-    flex-wrap: wrap;
+    flex: 0 0 auto;
   }
   .lock-banner-cta {
-    flex: 1 1 0;
-    min-width: 130px;
+    min-width: 150px;
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 9px 12px;
+    padding: 8px 12px;
     background: var(--black2);
     border: 1px solid var(--border);
     text-decoration: none;
@@ -1014,15 +1018,16 @@
     color: var(--silver-dim);
   }
   .lock-banner-explore {
-    margin-top: 14px;
-    padding-top: 12px;
-    border-top: 1px dashed var(--border);
-    text-align: center;
+    flex: 0 0 auto;
+    padding-left: 16px;
+    border-left: 1px dashed var(--border);
+    max-width: 200px;
   }
   .lock-banner-explore-link {
     font-family: var(--mono);
     font-size: 10px;
-    letter-spacing: 0.1em;
+    line-height: 1.4;
+    letter-spacing: 0.08em;
     color: var(--silver-dim);
     text-decoration: none;
     transition: color 0.15s;
@@ -1033,6 +1038,14 @@
   }
   .lock-banner-explore-link:hover { color: var(--silver); }
   .lock-banner-explore-link:hover strong { color: var(--gold-bright); }
+  /* Narrow screens: stack the banner sections vertically so nothing
+     overflows. Mirrors the existing header mobile breakpoint. */
+  @media (max-width: 860px) {
+    body.preset-only-mode .lock-banner { flex-direction: column; align-items: stretch; }
+    .lock-banner-explore { padding-left: 0; border-left: none; padding-top: 10px; border-top: 1px dashed var(--border); max-width: none; text-align: center; }
+    .lock-banner-cta-row { flex-wrap: wrap; }
+    .lock-banner-cta { flex: 1 1 0; }
+  }
 
   /* Anything below Core Config (i.e. the visual configuration sections)
      is locked out when preset-only-mode is active. The user can still
@@ -1362,6 +1375,47 @@
     </a>
   </header>
 
+  <!-- Public-tier informational banner (Phase 11 follow-up). Sits in the
+       full-width slot between the header and the two-column layout so
+       it doesn't burn vertical real estate inside the left panel. The
+       JS toggles body.preset-only-mode and the banner switches from
+       display:none to display:flex. Tenants who want custom rendering
+       run a private instance (separate URL); there's no unlock UI here. -->
+  <div class="lock-banner" id="lock-banner">
+    <div class="lock-banner-text">
+      <div class="lock-banner-title">Public access — preset selection only</div>
+      <div class="lock-banner-body">
+        To keep the public instance scalable, customization is limited
+        to the presets. For full control, run your own instance:
+      </div>
+    </div>
+    <div class="lock-banner-cta-row">
+      <a class="lock-banner-cta primary"
+         href="https://store.elfhosted.com?utm_source=postersplus&utm_medium=configurator&utm_campaign=lock_banner_store"
+         target="_blank" rel="noopener noreferrer">
+        <span class="lock-banner-cta-label">Get a private instance</span>
+        <span class="lock-banner-cta-sub">elfhosted.com — managed</span>
+      </a>
+      <a class="lock-banner-cta"
+         href="https://github.com/UmbraProjects/PostersPlus"
+         target="_blank" rel="noopener noreferrer">
+        <span class="lock-banner-cta-label">Self-host</span>
+        <span class="lock-banner-cta-sub">github.com — upstream source</span>
+      </a>
+    </div>
+    <!-- Stremio addons guide CTA. Anchor text deliberately uses the
+         exact "best Stremio addons" phrase for SEO weight on the
+         target page. UTM-tagged so the guide can attribute referrals
+         back to which PostersPlus surface drove the click. -->
+    <div class="lock-banner-explore">
+      <a class="lock-banner-explore-link"
+         href="https://stremio-addons-guide.elfhosted.com/?utm_source=postersplus&utm_medium=configurator&utm_campaign=lock_banner_addons_guide"
+         target="_blank" rel="noopener noreferrer">
+        Explore more — the <strong>best Stremio addons</strong>, hosted &amp; reviewed &rarr;
+      </a>
+    </div>
+  </div>
+
   <div class="main-layout">
 
     <!-- LEFT: CONFIG PANEL -->
@@ -1375,47 +1429,6 @@
 
         <input type="hidden" id="cfg-domain" value="">
         <input type="hidden" id="cfg-access-key" value="">
-
-        <!-- Public-tier informational banner (Phase 11 follow-up).
-             Shown whenever /server-caps reports preset_enabled=true —
-             the public-tier marker. Tenants who want custom rendering
-             run a private instance (separate URL); they never need to
-             "unlock" the public configurator with a key, so there's no
-             input here. Two CTAs explain how to get one. -->
-        <div class="lock-banner" id="lock-banner">
-          <div class="lock-banner-title">Public access — preset selection only</div>
-          <div class="lock-banner-body">
-            To keep the public instance scalable, customization is limited
-            to the presets below. For full per-poster control (sliders,
-            weights, sash priority), run your own instance:
-          </div>
-          <div class="lock-banner-cta-row">
-            <a class="lock-banner-cta primary"
-               href="https://store.elfhosted.com?utm_source=postersplus&utm_medium=configurator&utm_campaign=lock_banner_store"
-               target="_blank" rel="noopener noreferrer">
-              <span class="lock-banner-cta-label">Get a private instance</span>
-              <span class="lock-banner-cta-sub">elfhosted.com — managed</span>
-            </a>
-            <a class="lock-banner-cta"
-               href="https://github.com/UmbraProjects/PostersPlus"
-               target="_blank" rel="noopener noreferrer">
-              <span class="lock-banner-cta-label">Self-host</span>
-              <span class="lock-banner-cta-sub">github.com — upstream source</span>
-            </a>
-          </div>
-          <!-- Stremio addons guide CTA. Anchor text deliberately uses the
-               exact "best Stremio addons" phrase for SEO weight on the
-               target page (it's the canonical landing page for that
-               keyword). UTM-tagged so the guide can attribute referrals
-               back to which PostersPlus surface drove the click. -->
-          <div class="lock-banner-explore">
-            <a class="lock-banner-explore-link"
-               href="https://stremio-addons-guide.elfhosted.com/?utm_source=postersplus&utm_medium=configurator&utm_campaign=lock_banner_addons_guide"
-               target="_blank" rel="noopener noreferrer">
-              Explore more — the <strong>best Stremio addons</strong>, hosted &amp; reviewed &rarr;
-            </a>
-          </div>
-        </div>
 
         <!-- 1. CORE CONFIG -->
         <div class="section">
