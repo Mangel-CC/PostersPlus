@@ -201,7 +201,15 @@ from quality import (
     render_badges_left,
 )
 from ratings import calculate_weighted_score, draw_score_bar, fetch_rating, draw_score_bar_vertical
-from tmdb import composite_logo, fetch_logo, fetch_poster_metadata, fetch_poster_image, fetch_trending_rank
+from tmdb import (
+    composite_logo,
+    fetch_logo,
+    fetch_poster_metadata,
+    fetch_poster_image,
+    fetch_trending_rank,
+    resolve_imdb_to_tmdb,
+)
+from presets import get_preset, preset_names
 
 # ---------------------------------------------------------------------------
 # Persistent HTTP client
@@ -801,6 +809,8 @@ async def server_caps(access_key: str = ""):
         "tmdb_key_set":          bool(_cfg.SERVER_TMDB_KEY),
         "mdblist_key_set":       bool(_cfg.SERVER_MDBLIST_KEY),
         "aiostreams_configured": bool(_cfg.AIOSTREAMS_URL and _cfg.AIOSTREAMS_AUTH),
+        "preset_enabled":        _cfg.PRESET_ENABLED,
+        "presets":               preset_names() if _cfg.PRESET_ENABLED else [],
     }
 
 
@@ -1473,7 +1483,7 @@ async def get_poster(
     except httpx.TimeoutException as exc:
         if _render_fut is not None and not _render_fut.done():
             _render_fut.set_exception(exc)
-        logger.warning(f"Upstream timeout for tmdb_id={tmdb_id}: {type(exc).__name__}")
+        logger.warning(f"Upstream timeout for tmdb_id={tmdb_id}: {exc.__class__.__name__}")
         raise HTTPException(status_code=504, detail="Upstream request timed out")
     except httpx.HTTPStatusError as exc:
         if _render_fut is not None and not _render_fut.done():
@@ -1509,3 +1519,301 @@ async def get_poster(
             _rating_fetch_inflight.pop(imdb_id, None)
         if final_cache_key is not None:
             _render_inflight.pop(final_cache_key, None)
+
+
+# ---------------------------------------------------------------------------
+# Public preset endpoint (Phase 11)
+# ---------------------------------------------------------------------------
+# /p/{preset}/{type}/{imdb_id}.jpg — anonymous, CDN-cacheable, no per-user
+# keys. Six fixed presets ship in presets.py. The render pipeline is a
+# focused subset of /poster's: no MDBlist coalescing, no AIOStreams
+# background fetch, no per-tenant rate limit (operator-wide RATE_LIMIT_RPS
+# still applies via the "preset" tenant bucket).
+#
+# Rating data is used only when already cached. An uncached title renders
+# without rating on first hit and is served with a short cache-control so
+# the next request can pick up freshly-warmed rating data (warmed by the
+# next paid /poster call or a sister /p hit after PRESET_CDN_CACHE_TTL).
+# This deliberately avoids letting anonymous /p traffic burn MDBlist quota.
+
+_PRESET_ROUTE_VALID_TYPES = frozenset({"movie", "tv"})
+
+
+@app.get("/p/{preset}/{type}/{imdb_id}.jpg")
+async def get_preset_poster(
+    preset: str,
+    type: str,
+    imdb_id: str,
+):
+    if not _cfg.PRESET_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    preset_params = get_preset(preset)
+    if preset_params is None:
+        raise HTTPException(status_code=404, detail=f"Unknown preset '{preset}'")
+
+    # Accept the configurator's `series` placeholder substitution as an
+    # alias for `tv`. The /p route's path validator only stores `movie|tv`
+    # canonically; folding here keeps copied template URLs working when
+    # AIOMetadata fills `{type}` with `series` for TV shows.
+    if type == "series":
+        type = "tv"
+    if type not in _PRESET_ROUTE_VALID_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid type (movie|tv)")
+    _check_imdb_id(imdb_id)
+
+    effective_tmdb_key = _resolve_tmdb_key("")
+    if not effective_tmdb_key:
+        raise HTTPException(status_code=503, detail="Server TMDB key not configured")
+
+    # Operator-wide rate limit. All anonymous preset traffic shares the
+    # "preset" bucket so a runaway integration can't drag /poster down.
+    if _cfg.RATE_LIMIT_RPS > 0:
+        allowed, retry_after = await coord.check_rate_limit("preset", _cfg.RATE_LIMIT_RPS)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded ({_cfg.RATE_LIMIT_RPS} req/s)",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+    if _HTTP_CLIENT is None:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    client = _HTTP_CLIENT
+
+    tmdb_id = await resolve_imdb_to_tmdb(client, imdb_id, effective_tmdb_key, type)
+    if not tmdb_id:
+        raise HTTPException(status_code=404, detail="Title not found on TMDB")
+
+    raw_params = dict(preset_params)
+    rcfg = build_request_config(raw_params)
+
+    # Same cache key shape as /poster so a preset URL and an equivalent
+    # /poster URL share blobstore entries — no duplicate composites.
+    _params_hash = hashlib.md5(
+        "&".join(f"{k}={v}" for k, v in sorted(raw_params.items())).encode()
+    ).hexdigest()[:8]
+    final_cache_key = f"{imdb_id}:{type}:{_params_hash}"
+
+    # Long cache-control on cache hits; deterministic preset → deterministic URL.
+    def _preset_cache_header() -> dict:
+        ttl = _cfg.PRESET_CDN_CACHE_TTL
+        return {"Cache-Control": f"public, max-age={ttl}"} if ttl > 0 else {}
+
+    cdn_url = get_cached_final_poster_url(final_cache_key)
+    if cdn_url is not None:
+        if await is_cached_final_poster_fresh(final_cache_key):
+            logger.info(f"Preset {preset} cache hit (CDN redirect) for {final_cache_key}")
+            resp = Response(status_code=302)
+            resp.headers["Location"] = cdn_url
+            for k, v in _preset_cache_header().items():
+                resp.headers[k] = v
+            return resp
+    else:
+        cached_jpeg = await get_cached_final_poster(final_cache_key)
+        if cached_jpeg is not None:
+            logger.info(f"Preset {preset} cache hit (inline) for {final_cache_key}")
+            return Response(
+                content=cached_jpeg,
+                media_type="image/jpeg",
+                headers=_preset_cache_header(),
+            )
+
+    # Rating + quality data are used ONLY if already cached — anonymous
+    # /p traffic must not fan out into MDBlist or AIOStreams. Read both
+    # BEFORE wiring up coalescing because coalescing is only safe when
+    # we'll actually persist the composite. If either input is missing
+    # the render gets a short Cache-Control and is NOT persisted; sharing
+    # that response with waiters via _render_inflight would let them
+    # inherit the long preset TTL and poison the CDN with an incomplete
+    # poster that wouldn't refresh until PRESET_CDN_CACHE_TTL expires.
+    cached_rating = get_cached_rating(imdb_id)
+    cached_release_date = cached_rating[2] if cached_rating is not None else None
+    # NOTE: keep the None vs [] distinction. None means "never queried"
+    # (cache miss); [] means "queried, no quality tokens available for
+    # this title" — both render with no badges, but only the first
+    # should suppress persistence.
+    cached_quality = get_cached_quality(imdb_id, cached_release_date)
+    quality_tokens  = cached_quality or []
+    wants_badges    = rcfg.badge_display_mode in (1, 2)
+    quality_missing = wants_badges and cached_quality is None
+    will_persist    = cached_rating is not None and not quality_missing
+
+    # Coalesce concurrent uncached preset renders — only on the
+    # will-persist path. When inputs are incomplete each concurrent
+    # request renders independently; the duplicate work is bounded by
+    # RENDER_CONCURRENCY and the case is rare (cache warms after the
+    # first paid /poster hit).
+    _render_fut: "asyncio.Future[bytes] | None" = None
+    if will_persist:
+        _existing_fut = _render_inflight.get(final_cache_key)
+        if _existing_fut is not None:
+            logger.info(f"Preset {preset} coalescing on {final_cache_key}")
+            try:
+                return Response(
+                    content=await _existing_fut,
+                    media_type="image/jpeg",
+                    headers=_preset_cache_header(),
+                )
+            except Exception:
+                pass   # in-flight render failed; fall through and try ourselves
+        _render_fut = asyncio.get_running_loop().create_future()
+        _render_fut.add_done_callback(
+            lambda f: f.exception() if not f.cancelled() and f.exception() else None
+        )
+        _render_inflight[final_cache_key] = _render_fut
+
+    if cached_rating is not None:
+        (
+            ratings_dict, cached_genre, _cached_release_date,
+            award_wins, award_noms, _awards_fetched,
+            festival_label, age_rating,
+            is_cult, is_true_story, is_metacritic,
+        ) = cached_rating
+        effective_movie_weights = rcfg.movie_weights or _cfg.MOVIE_WEIGHTS
+        effective_tv_weights    = rcfg.tv_weights    or _cfg.TV_WEIGHTS
+        if isinstance(ratings_dict, dict):
+            weights = (
+                effective_tv_weights if type in ("tv", "series")
+                else effective_movie_weights
+            )
+            score = calculate_weighted_score(ratings_dict, weights)
+        else:
+            score = "N/A"
+        genre = cached_genre or "Unknown"
+        rel   = cached_release_date
+    else:
+        ratings_dict   = {}
+        score          = "N/A"
+        genre          = "Unknown"
+        rel            = None
+        award_wins     = []
+        award_noms     = []
+        festival_label = None
+        age_rating     = None
+        is_cult        = False
+        is_true_story  = False
+        is_metacritic  = False
+
+    try:
+        genre_ids, is_textless, logos, release_year, title, poster_path, tmdb_data = (
+            await fetch_poster_metadata(client, tmdb_id, effective_tmdb_key, type)
+        )
+
+        image, logo, trending_rank = await asyncio.gather(
+            fetch_poster_image(client, tmdb_id, type, poster_path),
+            fetch_logo(client, logos, rcfg.logo_language) if is_textless else _resolved(None),
+            fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type),
+        )
+
+        discovery_meta = extract_discovery_meta(
+            tmdb_data=tmdb_data,
+            media_type=type,
+            award_wins=award_wins,
+            award_noms=award_noms,
+            trending_rank=trending_rank,
+            release_date=rel,
+            keywords=[],
+            festival_label_override=festival_label,
+            is_cult_override=is_cult,
+            is_true_story_override=is_true_story,
+            is_metacritic_override=is_metacritic,
+            is_digital_release_override=is_digital_release(imdb_id),
+        )
+
+        _bp_args = dict(
+            logo=logo if is_textless else None,
+            fallback_title=title if is_textless and not logo else None,
+            discovery_meta=discovery_meta,
+            quality_tokens=quality_tokens,
+            release_year=release_year,
+            age_rating=age_rating,
+        )
+
+        def _composite_and_encode() -> bytes:
+            result = build_poster(image, score, genre, rcfg, **_bp_args)
+            buf = io.BytesIO()
+            result.convert("RGB").save(buf, format="JPEG", quality=85)
+            return buf.getvalue()
+
+        global _render_semaphore
+        if _render_semaphore is None:
+            _render_semaphore = asyncio.Semaphore(_cfg.RENDER_CONCURRENCY)
+        try:
+            if _cfg.RENDER_QUEUE_TIMEOUT > 0:
+                await asyncio.wait_for(
+                    _render_semaphore.acquire(),
+                    timeout=_cfg.RENDER_QUEUE_TIMEOUT,
+                )
+            else:
+                await _render_semaphore.acquire()
+        except asyncio.TimeoutError:
+            _metrics.render_saturated_total.inc()
+            logger.warning(
+                f"Render queue saturated (cap={_cfg.RENDER_CONCURRENCY}); "
+                f"returning 503 for preset={preset} imdb={imdb_id}"
+            )
+            if _render_fut is not None and not _render_fut.done():
+                _render_fut.set_exception(HTTPException(status_code=503))
+            raise HTTPException(
+                status_code=503,
+                detail="Server saturated — try again shortly",
+                headers={"Retry-After": "5"},
+            )
+        try:
+            _metrics.render_inflight.inc()
+            with _metrics.render_duration_seconds.time():
+                img_bytes = await asyncio.get_running_loop().run_in_executor(
+                    None, _composite_and_encode
+                )
+        finally:
+            _metrics.render_inflight.dec()
+            _render_semaphore.release()
+
+        # Cache the composite only when the inputs that drive the render
+        # were complete (will_persist; computed once at the top so the
+        # coalesce decision and the persist decision can't drift). Either
+        # incomplete case serves the bytes with a short revalidate window
+        # so the next request picks up the warmer cache.
+        if will_persist:
+            await set_cached_final_poster(final_cache_key, img_bytes)
+            logger.info(f"Preset {preset} cached for {final_cache_key}")
+            headers = _preset_cache_header()
+        else:
+            reason = (
+                "no rating data" if cached_rating is None else "no cached quality"
+            )
+            logger.info(
+                f"Preset {preset} served uncached ({reason}) for {final_cache_key}"
+            )
+            headers = {"Cache-Control": "public, max-age=300"}   # 5-min revalidate
+
+        if _render_fut is not None:
+            _render_fut.set_result(img_bytes)
+
+        return Response(content=img_bytes, media_type="image/jpeg", headers=headers)
+
+    except httpx.TimeoutException as exc:
+        if _render_fut is not None and not _render_fut.done():
+            _render_fut.set_exception(exc)
+        logger.warning(f"Preset upstream timeout for {imdb_id}: {exc.__class__.__name__}")
+        raise HTTPException(status_code=504, detail="Upstream request timed out")
+    except httpx.HTTPStatusError as exc:
+        if _render_fut is not None and not _render_fut.done():
+            _render_fut.set_exception(exc)
+        status = exc.response.status_code
+        if status == 404:
+            _endpoint = "tv" if type in ("tv", "series") else "movie"
+            delete_cached_tmdb_metadata(f"{_endpoint}_{tmdb_id}")
+            raise HTTPException(status_code=404, detail="Poster image not found on TMDB")
+        logger.error(f"Preset upstream HTTP {status} for {imdb_id}: {exc}")
+        raise HTTPException(status_code=502, detail=f"Upstream error {status}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if _render_fut is not None and not _render_fut.done():
+            _render_fut.set_exception(exc)
+        logger.exception(f"Error building preset poster for imdb={imdb_id} preset={preset}")
+        raise HTTPException(status_code=500, detail="Failed to build poster")
+    finally:
+        _render_inflight.pop(final_cache_key, None)

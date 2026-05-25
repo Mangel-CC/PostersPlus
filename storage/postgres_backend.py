@@ -150,6 +150,16 @@ def _bootstrap_schema(conn) -> None:
                 posted_at BIGINT NOT NULL
             )
         """)
+        # Phase 11: imdb_id -> tmdb_id mapping for the preset endpoint.
+        # No TTL — these mappings are effectively permanent.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS imdb_to_tmdb_cache (
+                imdb_id    TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                tmdb_id    TEXT NOT NULL,
+                PRIMARY KEY (imdb_id, media_type)
+            )
+        """)
     conn.commit()
 
 
@@ -764,6 +774,40 @@ def add_digital_releases(entries: list[tuple[str, int]]) -> int:
     except Exception as exc:
         logger.error(f"Digital release cache write error: {exc}")
     return inserted
+
+
+def get_cached_imdb_to_tmdb(imdb_id: str, media_type: str) -> str | None:
+    """Phase 11: look up the cached tmdb_id for an imdb_id + media_type."""
+    try:
+        with _get_pool().connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT tmdb_id FROM imdb_to_tmdb_cache "
+                    "WHERE imdb_id = %s AND media_type = %s",
+                    (imdb_id, media_type),
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as exc:
+        logger.error(f"imdb_to_tmdb cache read error: {exc}")
+        return None
+
+
+def set_cached_imdb_to_tmdb(imdb_id: str, media_type: str, tmdb_id: str) -> None:
+    try:
+        with _get_pool().connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO imdb_to_tmdb_cache (imdb_id, media_type, tmdb_id)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (imdb_id, media_type) DO UPDATE SET tmdb_id = EXCLUDED.tmdb_id
+                    """,
+                    (imdb_id, media_type, tmdb_id),
+                )
+            conn.commit()
+    except Exception as exc:
+        logger.error(f"imdb_to_tmdb cache write error: {exc}")
 
 
 def ping() -> bool:

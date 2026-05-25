@@ -116,6 +116,46 @@
     text-transform: uppercase;
   }
 
+  /* ElfHosted brand block — right-aligned in the header beside the
+     POSTERS+ logo. Matches the existing mono + caps + gold/silver-dim
+     aesthetic; SVG icon scales with the surrounding text. */
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    text-decoration: none;
+    color: inherit;
+  }
+  .header-right:hover .hosted-by-brand { color: var(--gold-bright); }
+  .header-right svg { display: block; }
+  .hosted-by-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 300;
+    color: var(--silver-dim);
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    line-height: 1.5;
+  }
+  .hosted-by-brand {
+    font-family: var(--serif);
+    font-size: 16px;
+    font-weight: 400;
+    color: var(--gold);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    transition: color 0.15s ease;
+  }
+  .hosted-by-tagline {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 300;
+    color: var(--silver-dim);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+
   .status-bar {
     display: flex;
     align-items: center;
@@ -1177,6 +1217,25 @@
         <span class="logo-sub">Web Configurator</span>
       </div>
     </div>
+
+    <!-- ElfHosted brand block — replace the inline <svg> below with the
+         real ElfHosted logo when you have it. Keeping it inline (rather
+         than referencing /static/) so the configurator stays a single
+         self-contained file. -->
+    <a class="header-right" href="https://elfhosted.com" target="_blank" rel="noopener noreferrer">
+      <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <!-- placeholder mark: stylised "elf hat" silhouette. Swap for the
+             real logo SVG when ready. -->
+        <path d="M18 4 L8 26 L28 26 Z" stroke="#c9a14a" stroke-width="1.4" fill="none"/>
+        <circle cx="18" cy="30" r="2" fill="#e6c068"/>
+        <path d="M14 26 H22" stroke="#c9a14a" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <div class="hosted-by-label">Hosted by</div>
+        <div class="hosted-by-brand">ElfHosted</div>
+        <div class="hosted-by-tagline">Open-source apps · Managed</div>
+      </div>
+    </a>
   </header>
 
   <div class="main-layout">
@@ -1201,6 +1260,27 @@
             <span class="section-chevron">▼</span>
           </div>
           <div class="section-body">
+
+            <!-- Preset mode (Phase 11). When a preset is selected the
+                 emitted URL switches to /p/{preset}/{type}/{imdb_id}.jpg —
+                 anonymous, CDN-cacheable, server-side keys only. Custom
+                 (the default) uses the full /poster URL with every field
+                 below as a query param. -->
+            <div class="field">
+              <label class="field-label">Preset Mode</label>
+              <select id="cfg-preset" oninput="onPresetChange()">
+                <option value="" selected>Custom (use settings below)</option>
+                <option value="default">default — standard look</option>
+                <option value="awards">awards — sash-forward, no score</option>
+                <option value="minimalist">minimalist — small genre, no bar</option>
+                <option value="letterboxd">letterboxd — numeric score, no sash</option>
+                <option value="cinephile">cinephile — prestige sash priority</option>
+                <option value="quality">quality — score + cached badges</option>
+              </select>
+              <div class="field-hint" id="preset-hint" style="display:none;color:var(--gold-dim);font-size:9px;margin-top:6px;line-height:1.4;">
+                Preset mode emits the short <code>/p/&hellip;</code> URL. Server-side TMDB key is required; the configuration sections below are bypassed.
+              </div>
+            </div>
 
             <div class="field">
               <label class="field-label">Content Search</label>
@@ -1624,7 +1704,7 @@ const SASH_SLOTS = [
 let sashOrder    = SASH_SLOTS.map(s => s.id);
 let sashDisabled = new Set();   // IDs explicitly disabled via ✕ button
 let mediaType = 'movie', resolvedImdbId = '', resolvedTmdbId = '';
-let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false };
+let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false, preset_enabled: false, presets: [] };
 let searchDebounce = null, previewDebounce = null, previewLoading = false, imdbResolvePending = false;
 
 const previewPanel = document.querySelector('.preview-panel');
@@ -1739,6 +1819,27 @@ function updateKeyBadges() {
   const aiosHint = document.getElementById('aiostreams-hint');
   if (aiosHint) {
     aiosHint.style.display = serverCaps.aiostreams_configured ? 'none' : '';
+  }
+
+  // Phase 11: hide the preset selector entirely on instances that haven't
+  // opted into the public preset endpoint (PRESET_ENABLED unset/false).
+  // The dropdown's options would emit /p/... URLs that 404 against this
+  // backend, so it's better to remove the temptation than to render dead
+  // links. If a preset is already selected (e.g. via URL import) clear it
+  // so the URL output reverts to /poster form.
+  const presetField = document.getElementById('cfg-preset');
+  if (presetField) {
+    const fieldWrap = presetField.closest('.field');
+    if (serverCaps.preset_enabled) {
+      if (fieldWrap) fieldWrap.style.display = '';
+    } else {
+      if (fieldWrap) fieldWrap.style.display = 'none';
+      if (presetField.value) {
+        presetField.value = '';
+        refreshPresetUiState();
+        build();
+      }
+    }
   }
 }
 
@@ -2262,6 +2363,18 @@ function decodePlaceholders(url) {
   return url.replace(/%7B/g, '{').replace(/%7D/g, '}');
 }
 
+function refreshPresetUiState() {
+  const preset = vEl('cfg-preset');
+  const hint = document.getElementById('preset-hint');
+  if (hint) hint.style.display = preset ? 'block' : 'none';
+  document.body.classList.toggle('preset-active', !!preset);
+}
+
+function onPresetChange() {
+  refreshPresetUiState();
+  build();
+}
+
 function buildBaseParams({ usePlaceholders = false } = {}) {
   const domain   = vEl('cfg-domain').replace(/\/$/, '') || 'https://your-instance.com';
   const logoLanguage = vEl('cfg-language') || 'en';
@@ -2269,6 +2382,19 @@ function buildBaseParams({ usePlaceholders = false } = {}) {
   const tmdbId   = usePlaceholders ? '{tmdb_id}'  : (resolvedTmdbId  || '{tmdb_id}');
   const accKey   = vEl('cfg-access-key');
   const type     = usePlaceholders ? '{type}'     : mediaType;
+
+  // Phase 11: preset mode short-circuits the full param URL. The /p
+  // endpoint takes only (preset, type, imdb_id) and pulls visual params
+  // server-side from presets.py, so the configurator's other fields are
+  // intentionally not included in the URL when a preset is selected.
+  const preset = vEl('cfg-preset');
+  if (preset) {
+    // Type in the path is movie|tv (no "series" variant on the preset
+    // endpoint); fold series→tv to match the route's validator.
+    const presetType = (type === 'series') ? 'tv' : type;
+    const presetUrl = `${domain}/p/${preset}/${presetType}/${imdbId}.jpg`;
+    return usePlaceholders ? decodePlaceholders(presetUrl) : presetUrl;
+  }
   const userTmdbKey    = vEl('cfg-tmdb-key');
   const userMdblistKey = vEl('cfg-mdblist-key');
   const params = new URLSearchParams();
@@ -2340,6 +2466,7 @@ function resetDefaults() {
   sashDisabled = new Set();
   localStorage.removeItem('postersplus_sash_order');
   buildSashList();
+  refreshPresetUiState();
   build();
   collapsePreview();
   setLog('preview-log', 'Reset to defaults. API keys preserved.', 'info');
@@ -2348,7 +2475,9 @@ function resetDefaults() {
 function queuePreviewReload() {
   clearTimeout(previewDebounce);
   previewDebounce = setTimeout(() => {
-    if (resolvedImdbId && resolvedTmdbId) loadPreview();
+    // Preset mode needs only imdb_id; custom mode still needs both.
+    const presetMode = !!vEl('cfg-preset');
+    if (presetMode ? resolvedImdbId : (resolvedImdbId && resolvedTmdbId)) loadPreview();
   }, 350);
 }
 
@@ -2361,8 +2490,17 @@ function setLog(id, msg, cls='') {
 async function loadPreview() {
   if (previewLoading) { clearTimeout(previewDebounce); return; }
   if (imdbResolvePending) return;
-  if (!resolvedImdbId || !resolvedTmdbId) { setLog('preview-log', 'Search and select a title first', 'err'); return; }
-  if (!vEl('cfg-tmdb-key') && !serverCaps.tmdb_key_set) { setLog('preview-log', 'This instance has no server side TMDB key. You must provide your own or ask the operator to add one.', 'err'); return; }
+  // Phase 11: preset mode only needs an IMDb id (the server resolves to
+  // TMDB id from there); custom mode still requires both. Likewise the
+  // user-side TMDB key requirement is for /poster — /p uses the operator's
+  // server key exclusively.
+  const presetMode = !!vEl('cfg-preset');
+  if (presetMode) {
+    if (!resolvedImdbId) { setLog('preview-log', 'Search and select a title first', 'err'); return; }
+  } else {
+    if (!resolvedImdbId || !resolvedTmdbId) { setLog('preview-log', 'Search and select a title first', 'err'); return; }
+    if (!vEl('cfg-tmdb-key') && !serverCaps.tmdb_key_set) { setLog('preview-log', 'This instance has no server side TMDB key. You must provide your own or ask the operator to add one.', 'err'); return; }
+  }
   previewLoading = true;
   document.getElementById('preview-status').textContent = 'LOADING';
   const frame = document.getElementById('preview-frame');
@@ -2371,7 +2509,9 @@ async function loadPreview() {
     frame.innerHTML = `<div class="preview-empty"><div class="preview-spinner"></div>Fetching poster…</div>`;
   }
   setLog('preview-log', 'fetching poster…', 'info');
-  const previewUrl = buildPreviewUrl() + '&_ts=' + Date.now();
+  // Cache-bust without breaking path-only preset URLs (no existing `?`).
+  const baseUrl = buildPreviewUrl();
+  const previewUrl = baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_ts=' + Date.now();
   const existingImg = frame.querySelector('.preview-poster');
   if (existingImg) {
     existingImg.style.opacity = '0.3';
@@ -2462,13 +2602,35 @@ function importUrl(urlStr) {
     return false;
   }
 
+  // Phase 11: also accept /p/{preset}/{type}/{imdb_id}.jpg preset URLs.
+  // Path components are positional, no query params expected.
+  const presetMatch = parsed.pathname.match(/^\/p\/([^\/]+)\/(movie|tv)\/(tt\d+)\.jpg\/?$/);
+  if (presetMatch) {
+    const [, preset, presetType, imdbId] = presetMatch;
+    document.getElementById('cfg-domain').value = parsed.origin;
+    resolvedImdbId = imdbId;
+    mediaType      = presetType;
+    _setEl('cfg-preset', preset);
+    refreshPresetUiState();
+    build();
+    setLog('preview-log', `Imported preset URL: ${preset} / ${presetType} / ${imdbId}.`, 'ok');
+    return true;
+  }
+
   // Only accept /poster paths
   if (!parsed.pathname.endsWith('/poster') && !parsed.pathname.endsWith('/poster/')) {
-    setLog('preview-log', 'Import failed — URL does not look like a poster endpoint (/poster).', 'err');
+    setLog('preview-log', 'Import failed — URL does not look like a poster endpoint (/poster or /p/…).', 'err');
     return false;
   }
 
   const p = parsed.searchParams;
+
+  // Phase 11: a /poster URL is by definition custom mode. Clear any
+  // previously-selected preset so the rebuilt output URL stays in /poster
+  // form instead of re-emitting /p/{preset}/... with the imported values
+  // silently dropped.
+  _setEl('cfg-preset', '');
+  refreshPresetUiState();
 
   // ── Domain & auth ──────────────────────────────────────────────────────
   document.getElementById('cfg-domain').value = parsed.origin;

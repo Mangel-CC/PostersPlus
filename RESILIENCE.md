@@ -496,6 +496,85 @@ TMDB CDN (image.tmdb.org)
 
 ---
 
+## Phase 11 — Public preset endpoint
+
+**Branch:** `phase-11-presets`
+**Status:** implementation complete, codex review pending
+
+**Motivation:** Phase 10 made the composite-poster cache cheap to serve at the edge — a single 302 redirects clients to a CDN-fronted blob. But the existing `/poster` URL is still parameterised by a long query string (every visual knob in the configurator). That's:
+
+- **Long and ugly** for share/embed scenarios.
+- **Coupled to per-user keys** (`tmdb_key`, `mdblist_key`, `access_key` are all query params), so an anonymous URL can't reuse the operator's cache hits.
+- **Cache-unfriendly at the URL level** — a CDN in front of PostersPlus would key on the full query string, fragmenting the cache.
+
+The preset endpoint solves these for the **anonymous public tier** of the service while leaving `/poster` exactly as it is for paying tenants who want full per-user customisation.
+
+**URL shape:** `GET /p/{preset}/{type}/{imdb_id}.jpg`
+
+- `preset` — one of the six registered names (see below); resolves to a fixed `raw_params` dict.
+- `type` — `movie` or `tv`. The configurator's `series` alias is folded to `tv` on this route.
+- `imdb_id` — the universal Stremio identifier (`tt\d+`). Server-side resolved to `tmdb_id` via a one-shot TMDB `/find` call, then cached forever in `imdb_to_tmdb_cache` (these mappings don't move).
+
+The path-only URL is human-shareable, deterministic, and CDN-friendly: Cloudflare in front of PostersPlus can cache `/p/awards/movie/tt0111161.jpg` directly without fragmenting on query strings.
+
+**Six starter presets** (`presets.py`):
+
+| Name         | Look                                                        |
+| ------------ | ----------------------------------------------------------- |
+| `default`    | Standard configurator-equivalent rendering                  |
+| `awards`     | Sash-forward, numeric score hidden                          |
+| `minimalist` | Small genre text, no score bar                              |
+| `letterboxd` | Numeric score + Letterboxd-weighted rating, no sash         |
+| `cinephile`  | Prestige-leaning sash priority (festival before commercial) |
+| `quality`    | Score visible + cached quality badges                       |
+
+All presets share a public-tier base: `badge_display_mode=1` (cached badges only, never AIOStreams fan-out on anonymous traffic) and `show_award_sash=true`.
+
+**Public-tier render path simplifications** (relative to `/poster`):
+
+- No `access_key` gating — endpoint is anonymous; gated only by the operator setting `PRESET_ENABLED=true`.
+- No per-user `tmdb_key` / `mdblist_key` — operator's server keys are required (the endpoint returns 503 if the server TMDB key is unconfigured).
+- No MDBlist fan-out: rating data is used only if already cached. An uncached title renders without rating once with a short `Cache-Control: max-age=300`, so the next /poster call (paid tenant) or sister /p hit can pick up warmed data after PRESET_CDN_CACHE_TTL. Prevents anonymous /p traffic from burning the operator's MDBlist quota.
+- No AIOStreams background fetch: quality tokens are read from cache; `badge_display_mode=1` means cached-or-nothing.
+- No per-tenant rate limit — all anonymous /p traffic shares the `"preset"` bucket so a runaway integration can't drag /poster down.
+
+Cache key shape is identical to `/poster`'s (`imdb_id:type:params_hash`), so a preset URL and a config-equivalent `/poster` URL hit the **same** composite blob — no duplication in storage.
+
+**Code changes:**
+
+- `presets.py` — new module; pure data. Six preset dicts + `get_preset()` / `preset_names()` accessors. Adding/renaming a preset is a one-file change.
+- `tmdb.py` — adds `resolve_imdb_to_tmdb()` (TMDB `/find` with imdb_id external source, cached).
+- `storage/{sqlite,postgres}_backend.py` — adds `imdb_to_tmdb_cache` table + get/set helpers. No TTL: the mapping is permanent.
+- `storage/__init__.py`, `cache.py` — re-export the two new helpers.
+- `config.py` — `PRESET_ENABLED` (default false) and `PRESET_CDN_CACHE_TTL` (default 86400 = 24h).
+- `main.py` — new `@app.get("/p/{preset}/{type}/{imdb_id}.jpg")` handler (~150 lines). Reuses the same coalescing dict (`_render_inflight`), render semaphore, blobstore + final-cache helpers. `/server-caps` now advertises `preset_enabled` + the list of presets.
+- `configurator.html` — preset dropdown in Core Config; when set, the URL output switches to `/p/{preset}/{type}/{imdb_id}.jpg` form. Import flow recognises and round-trips preset URLs.
+
+**Operator switches:**
+
+- `PRESET_ENABLED=true` — turn on the endpoint. Default off so private/self-hosted deployments aren't surprised.
+- `PRESET_CDN_CACHE_TTL=86400` — `Cache-Control: max-age` on successful preset responses. Long by design: presets are deterministic per (preset, type, imdb_id).
+- The operator's `SERVER_TMDB_KEY` must be set; `SERVER_MDBLIST_KEY` is optional (without it /p renders without rating data).
+
+**Verified end-to-end:**
+
+- syntax: all modified Python files parse; HTML/JS in configurator.html parses via Node `Function`.
+- preset URL → 200 jpeg (cached rating)
+- preset URL → 200 jpeg + short cache-control (uncached rating, no MDBlist key)
+- preset URL → 302 redirect to CDN bucket when `OBJECT_STORE_PUBLIC_URL` is set
+- unknown preset → 404 with explicit `Unknown preset 'foo'` detail
+- `PRESET_ENABLED=false` → 404 (endpoint hidden)
+- configurator import of preset URL round-trips back to the same preset
+- configurator import of /poster URL unchanged
+
+**Known follow-ups:**
+
+- Could pre-warm the preset cache with popular titles (Cannes Palme d'Or list, AFI 100, current Trending) so the very first anonymous hit is already CDN-cached. Cron job that POSTs against `/p/{preset}/...` for a curated list nightly.
+- Could expose `postersplus_preset_requests_total{preset, type, outcome}` metric so dashboards can see which presets are popular.
+- Trakt OAuth + watch-progress overlay (BetterPosters parity gap) would be its own per-user feature on `/poster`, not a public preset — different security model.
+
+---
+
 ## Codex review log
 
 Per-phase second opinion via `~/.claude/bin/codex-review`. Findings recorded inline below.
@@ -567,4 +646,25 @@ Self-audit notes (not findings, just explicit rationales for future readers):
 
 Phase 2 ready to merge once user signs and commits.
 
-...
+### Phase 11 — reviewed
+
+Codex review (2026-05-26): five P2 findings landed across four review iterations; all fixed. Pass 5 returned clean ("No discrete, actionable bugs were identified … internally consistent.").
+
+Findings + fixes:
+
+1. **Coalesced no-rating renders inherited the long preset TTL.** The leader correctly used `max-age=300` when no rating was cached, but waiters on `_render_inflight` returned the same bytes with `_preset_cache_header()` (24h). A concurrent caller could cache an incomplete poster at the CDN for the full preset TTL. **Fixed:** `cached_rating` (and `cached_quality`) are read *before* the coalesce decision. Coalescing is registered only on the `will_persist` path; incomplete renders bypass `_render_inflight` so each request is responsible for its own short-TTL response.
+
+2. **`series` placeholder rejected by `/p` route.** Configurator template URLs emit `{type}` literally; downstream substitutors fill that with `series` for TV shows. The /p path validator only accepted `movie|tv`, so copied preset URLs 404'd for series. **Fixed:** /p now folds `series → tv` at the top of the handler before validation.
+
+3. **Stale-when-cached-empty for quality.** `get_cached_quality(imdb_id, rel) or []` conflated `None` (cache miss) with `[]` (queried, no tokens available). Titles with a legitimately-empty cached quality row would never persist their composite. **Fixed:** `quality_missing` is now `cached_quality is None` only; an empty cached list is treated as a valid input.
+
+4. **`cfg-preset` not cleared on /poster import.** Importing a `/poster?...` URL left a previously-selected preset in the dropdown, so `build()` re-emitted `/p/{preset}/...` and the imported custom params were silently dropped. **Fixed:** the /poster import path now resets `cfg-preset` to "" and refreshes UI state before populating fields.
+
+5. **Configurator exposed preset selector when backend has `PRESET_ENABLED=false`.** Users could pick a preset and generate URLs that would 404. **Fixed:** `/server-caps` now reports `preset_enabled` + the preset name list; `updateKeyBadges()` hides the preset field on instances that haven't opted in, and clears any stale selection.
+
+Plus two follow-ups raised in the final pass and fixed pre-clean-review:
+
+- **Cache-buster broke path-only preset URLs.** `loadPreview()` appended `&_ts=...` unconditionally, producing `/p/.../tt0.jpg&_ts=...` which doesn't match the FastAPI route. **Fixed:** uses `?_ts=` when no query string is present, `&_ts=` otherwise.
+- **Preview disabled after importing a /p URL.** `loadPreview` and `queuePreviewReload` required `resolvedTmdbId`, but preset URLs only carry imdb_id. **Fixed:** preset mode requires only `resolvedImdbId`; the server-side resolver handles the rest.
+
+Phase 11 ready to merge once user signs and commits.

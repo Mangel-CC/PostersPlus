@@ -96,6 +96,16 @@ RATE_LIMIT_RPS          = int(os.environ.get("RATE_LIMIT_RPS", "0"))
 # edge. Set to 0 to disable (e.g. when running without a CDN).
 CDN_CACHE_TTL         = int(os.environ.get("CDN_CACHE_TTL", "0"))
 
+# Phase 11: public preset endpoint (/p/{preset}/{type}/{imdb_id}.jpg).
+# When PRESET_ENABLED is true, anonymous requests can hit a small set of
+# named visual presets without supplying access_key / tmdb_key / mdblist_key.
+# The operator's server-configured keys are used; PRESET_CDN_CACHE_TTL
+# controls the Cache-Control max-age on preset responses (defaults to 1
+# day — much longer than CDN_CACHE_TTL since presets are deterministic
+# per (preset, type, imdb_id) and don't change with query params).
+PRESET_ENABLED        = os.environ.get("PRESET_ENABLED", "").strip().lower() in ("1", "true", "yes")
+PRESET_CDN_CACHE_TTL  = int(os.environ.get("PRESET_CDN_CACHE_TTL", "86400"))
+
 # Feature Defaults 
 
 SHOW_RATING_DISPLAY_MODE = 1

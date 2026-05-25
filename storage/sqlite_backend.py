@@ -184,6 +184,19 @@ def init_db() -> None:
         )
     """)
 
+    # Phase 11: imdb_id -> tmdb_id mapping. Used by the preset endpoint
+    # (/p/{preset}/{type}/{imdb_id}.jpg) to avoid a TMDB /find call on
+    # every public hit. The mapping is effectively immutable, so there's
+    # no TTL — entries live for the lifetime of the cache.
+    _db_conn.execute("""
+        CREATE TABLE IF NOT EXISTS imdb_to_tmdb_cache (
+            imdb_id    TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            tmdb_id    TEXT NOT NULL,
+            PRIMARY KEY (imdb_id, media_type)
+        )
+    """)
+
     existing_meta_cols = {
         row[1]
         for row in _db_conn.execute("PRAGMA table_info(tmdb_metadata_cache)").fetchall()
@@ -869,6 +882,31 @@ def add_digital_releases(entries: list[tuple[str, int]]) -> int:
     except Exception as exc:
         logger.error(f"Digital release cache write error: {exc}")
     return inserted
+
+
+def get_cached_imdb_to_tmdb(imdb_id: str, media_type: str) -> str | None:
+    """Phase 11: look up the cached tmdb_id for an imdb_id + media_type."""
+    try:
+        row = get_db().execute(
+            "SELECT tmdb_id FROM imdb_to_tmdb_cache WHERE imdb_id = ? AND media_type = ?",
+            (imdb_id, media_type),
+        ).fetchone()
+        return row[0] if row else None
+    except Exception as exc:
+        logger.error(f"imdb_to_tmdb cache read error: {exc}")
+        return None
+
+
+def set_cached_imdb_to_tmdb(imdb_id: str, media_type: str, tmdb_id: str) -> None:
+    try:
+        with _db_lock:
+            get_db().execute(
+                "INSERT OR REPLACE INTO imdb_to_tmdb_cache (imdb_id, media_type, tmdb_id) VALUES (?, ?, ?)",
+                (imdb_id, media_type, tmdb_id),
+            )
+            get_db().commit()
+    except Exception as exc:
+        logger.error(f"imdb_to_tmdb cache write error: {exc}")
 
 
 def ping() -> bool:
