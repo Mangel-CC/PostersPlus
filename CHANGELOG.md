@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/elfhosted/PostersPlus/compare/v0.2.0...v0.3.0) (2026-05-25)
+
+
+### Features
+
+* brand tagline + Stremio addons CTA + UTM-tagged elfhosted links ([c560289](https://github.com/elfhosted/PostersPlus/commit/c56028996fbab7b5a2d27ece47bf4a19a7ad9c6e))
+* informational public-tier banner; drop access-key unlock UI ([c122a36](https://github.com/elfhosted/PostersPlus/commit/c122a367a76649529b0eedb10cf08312bfc1b43e))
+* Phase 11 — anonymous CDN-cacheable preset endpoint ([4920db3](https://github.com/elfhosted/PostersPlus/commit/4920db3051dbaaddbbe10c3b239af89c2f0db2d2))
+* public-tier preset-only lock + anonymous TMDB proxy gating ([b7246f9](https://github.com/elfhosted/PostersPlus/commit/b7246f9957cdd0f0d06087308efbff97ce8407e8))
+* SEO + LLM discovery — meta, JSON-LD, noscript, llms.txt ([2bf6e64](https://github.com/elfhosted/PostersPlus/commit/2bf6e644e5557089b0533ba59dc3cb852f193db8))
+* use real ElfHosted logo in configurator header ([6f6cd7f](https://github.com/elfhosted/PostersPlus/commit/6f6cd7f645b403a003d5d90e69a77761887baddb))
+
+
+### Bug Fixes
+
+* lock-mode silently bypassed by null-deref in updateKeyBadges ([90d07d2](https://github.com/elfhosted/PostersPlus/commit/90d07d2a59833d4d683fdf5d9767fbfc42ec2352))
+
 ## [0.2.0](https://github.com/elfhosted/PostersPlus/compare/v0.1.0...v0.2.0) (2026-05-24)
 
 
