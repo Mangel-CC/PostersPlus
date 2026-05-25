@@ -1897,8 +1897,16 @@ async function fetchServerCaps() {
     const resp = await fetch(url);
     if (!resp.ok) return;
     serverCaps = await resp.json();
-    updateKeyBadges();
-  } catch(e) {}
+  } catch(e) {
+    console.warn('fetchServerCaps failed', e);
+    return;
+  }
+  // Apply the lock state first — independent of badge/hint DOM elements
+  // that may or may not be present in this fork's configurator HTML. A
+  // null-deref inside updateKeyBadges() must not strand the lock in the
+  // unlocked state.
+  try { applyLockMode(); }   catch(e) { console.warn('applyLockMode failed', e); }
+  try { updateKeyBadges(); } catch(e) { console.warn('updateKeyBadges failed', e); }
 }
 
 function updateKeyBadges() {
@@ -1909,22 +1917,26 @@ function updateKeyBadges() {
   const tmdbInput = document.getElementById('cfg-tmdb-key');
   const mdbInput  = document.getElementById('cfg-mdblist-key');
 
+  // These badge/hint elements are upstream-historical and not guaranteed
+  // to exist in every configurator variant — guard each access so a
+  // missing badge node can't strand the rest of the function (notably
+  // the preset-only lock flow downstream).
   if (serverCaps.tmdb_key_set) {
-    tmdbBadge.style.display = ''; tmdbBadge.textContent = 'Server Key Set'; tmdbBadge.className = 'server-key-badge';
-    tmdbHint.style.display = ''; tmdbHint.textContent = 'Server-side TMDB key configured. Your key (if entered) takes priority.';
-    tmdbInput.placeholder = 'Optional — server key used if blank';
+    if (tmdbBadge) { tmdbBadge.style.display = ''; tmdbBadge.textContent = 'Server Key Set'; tmdbBadge.className = 'server-key-badge'; }
+    if (tmdbHint)  { tmdbHint.style.display = '';  tmdbHint.textContent = 'Server-side TMDB key configured. Your key (if entered) takes priority.'; }
+    if (tmdbInput) tmdbInput.placeholder = 'Optional — server key used if blank';
   } else {
-    tmdbBadge.style.display = ''; tmdbBadge.textContent = 'No Server Key'; tmdbBadge.className = 'server-key-badge missing';
-    tmdbHint.style.display = 'none';
-    tmdbInput.placeholder = 'Required — no server key configured';
+    if (tmdbBadge) { tmdbBadge.style.display = ''; tmdbBadge.textContent = 'No Server Key'; tmdbBadge.className = 'server-key-badge missing'; }
+    if (tmdbHint)  tmdbHint.style.display = 'none';
+    if (tmdbInput) tmdbInput.placeholder = 'Required — no server key configured';
   }
 
   if (serverCaps.mdblist_key_set) {
-    mdbHint.style.display = ''; mdbHint.textContent = 'Server-side MDblist key configured. Your key (if entered) takes priority.';
-    mdbInput.placeholder = 'Optional — server key used if blank';
+    if (mdbHint)  { mdbHint.style.display = ''; mdbHint.textContent = 'Server-side MDblist key configured. Your key (if entered) takes priority.'; }
+    if (mdbInput) mdbInput.placeholder = 'Optional — server key used if blank';
   } else {
-    mdbHint.style.display = ''; mdbHint.textContent = 'Cached titles work without a key. Uncached titles require a key.';
-    mdbInput.placeholder = 'Required for uncached titles';
+    if (mdbHint)  { mdbHint.style.display = ''; mdbHint.textContent = 'Cached titles work without a key. Uncached titles require a key.'; }
+    if (mdbInput) mdbInput.placeholder = 'Required for uncached titles';
   }
 
   const aiosHint = document.getElementById('aiostreams-hint');
@@ -1953,13 +1965,8 @@ function updateKeyBadges() {
     }
   }
 
-  // Phase 11 follow-up: preset-only-mode is the public-host posture.
-  // When the server has ACCESS_KEY set and we don't have a valid one,
-  // every /poster-driving control is dimmed via body.preset-only-mode
-  // and the "Custom" option is removed from the preset dropdown so the
-  // only emittable URL form is the anonymous /p/{preset}/.... A tenant
-  // with a key types it into the lock banner and the body class drops.
-  applyLockMode();
+  // Note: applyLockMode() is called from fetchServerCaps() directly so
+  // a missing badge/hint element above can't keep the lock from firing.
 }
 
 function applyLockMode() {
