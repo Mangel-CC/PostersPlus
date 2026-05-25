@@ -936,6 +936,20 @@ async def readiness_probe():
     return {"status": "ok", **body}
 
 
+@app.api_route("/llms.txt", methods=["GET", "HEAD"], response_class=Response)
+async def get_llms_txt():
+    """llmstxt.org convention — serve the LLM-readable site summary at
+    the root path. The file lives under static/ for editability but
+    must be reachable at /llms.txt per the spec. HEAD is supported so
+    crawlers that probe before fetching don't see a 405."""
+    path = os.path.join(BASE_DIR, "static", "llms.txt")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return Response(content=f.read(), media_type="text/markdown")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="llms.txt not found")
+
+
 @app.get("/", response_class=HTMLResponse)
 async def get_configurator(access_key: str = ""):
     # Conditionally anonymous (Phase 11 follow-up):
