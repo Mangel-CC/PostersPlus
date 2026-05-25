@@ -38,7 +38,7 @@ Posters+ aggregates from MDBList (IMDB, Rotten Tomatoes, Letterboxd, Metacritic,
 ## Related ElfHosted services
 
 - [Best Stremio Addons guide](https://stremio-addons-guide.elfhosted.com/) — curated reviews of Stremio addons, hosted by ElfHosted.
-- [ElfHosted store](https://store.elfhosted.com) — managed private instances of Posters+ and other open-source apps.
+- [Posters+ on the ElfHosted store](https://store.elfhosted.com/product/posters-plus) — managed private instance of Posters+ with full per-poster customisation.
 - [Stremio Addons Guide (docs)](https://docs.elfhosted.com/stremio-addons/guide/) — full ElfHosted Stremio documentation.
 
 ## Source
