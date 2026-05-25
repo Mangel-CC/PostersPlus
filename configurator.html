@@ -945,22 +945,20 @@
   .url-param-val { color: var(--silver); }
   .url-placeholder { color: var(--gold-dim); }
 
-  /* ── PRESET-ONLY LOCK ── horizontal banner between header + layout */
+  /* ── PRESET-ONLY LOCK ── horizontal banner between header + layout.
+     Text on top, three CTAs on a single row below — keeps the banner
+     short while letting all three calls-to-action breathe equally. */
   .lock-banner {
     display: none;
+    flex-direction: column;
+    gap: 10px;
     margin: 0 0 20px;
     padding: 12px 18px;
     background: var(--black);
     border: 1px solid var(--gold-dim);
     border-left: 3px solid var(--gold);
-    gap: 18px;
-    align-items: center;
   }
   body.preset-only-mode .lock-banner { display: flex; }
-  .lock-banner-text {
-    flex: 1 1 0;
-    min-width: 240px;
-  }
   .lock-banner-title {
     font-family: var(--mono);
     font-size: 9px;
@@ -979,10 +977,11 @@
   .lock-banner-cta-row {
     display: flex;
     gap: 8px;
-    flex: 0 0 auto;
+    flex-wrap: wrap;
   }
   .lock-banner-cta {
-    min-width: 150px;
+    flex: 1 1 0;
+    min-width: 160px;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -996,12 +995,9 @@
     background: #161616;
     border-color: var(--gold-dim);
   }
-  .lock-banner-cta.primary {
-    border-color: var(--gold-dim);
-  }
-  .lock-banner-cta.primary:hover {
-    border-color: var(--gold);
-  }
+  .lock-banner-cta.primary  { border-color: var(--gold-dim); }
+  .lock-banner-cta.primary:hover { border-color: var(--gold); }
+  .lock-banner-cta.tertiary { border-style: dashed; }
   .lock-banner-cta-label {
     font-family: var(--mono);
     font-size: 10px;
@@ -1016,35 +1012,6 @@
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--silver-dim);
-  }
-  .lock-banner-explore {
-    flex: 0 0 auto;
-    padding-left: 16px;
-    border-left: 1px dashed var(--border);
-    max-width: 200px;
-  }
-  .lock-banner-explore-link {
-    font-family: var(--mono);
-    font-size: 10px;
-    line-height: 1.4;
-    letter-spacing: 0.08em;
-    color: var(--silver-dim);
-    text-decoration: none;
-    transition: color 0.15s;
-  }
-  .lock-banner-explore-link strong {
-    color: var(--gold);
-    font-weight: 500;
-  }
-  .lock-banner-explore-link:hover { color: var(--silver); }
-  .lock-banner-explore-link:hover strong { color: var(--gold-bright); }
-  /* Narrow screens: stack the banner sections vertically so nothing
-     overflows. Mirrors the existing header mobile breakpoint. */
-  @media (max-width: 860px) {
-    body.preset-only-mode .lock-banner { flex-direction: column; align-items: stretch; }
-    .lock-banner-explore { padding-left: 0; border-left: none; padding-top: 10px; border-top: 1px dashed var(--border); max-width: none; text-align: center; }
-    .lock-banner-cta-row { flex-wrap: wrap; }
-    .lock-banner-cta { flex: 1 1 0; }
   }
 
   /* Anything below Core Config (i.e. the visual configuration sections)
@@ -1402,16 +1369,15 @@
         <span class="lock-banner-cta-label">Self-host</span>
         <span class="lock-banner-cta-sub">github.com — upstream source</span>
       </a>
-    </div>
-    <!-- Stremio addons guide CTA. Anchor text deliberately uses the
-         exact "best Stremio addons" phrase for SEO weight on the
-         target page. UTM-tagged so the guide can attribute referrals
-         back to which PostersPlus surface drove the click. -->
-    <div class="lock-banner-explore">
-      <a class="lock-banner-explore-link"
+      <!-- Stremio addons guide CTA. Anchor text deliberately uses the
+           exact "best Stremio addons" phrase for SEO weight on the
+           target page. UTM-tagged so the guide can attribute referrals
+           back to which PostersPlus surface drove the click. -->
+      <a class="lock-banner-cta tertiary"
          href="https://stremio-addons-guide.elfhosted.com/?utm_source=postersplus&utm_medium=configurator&utm_campaign=lock_banner_addons_guide"
          target="_blank" rel="noopener noreferrer">
-        Explore more — the <strong>best Stremio addons</strong>, hosted &amp; reviewed &rarr;
+        <span class="lock-banner-cta-label">Best Stremio addons</span>
+        <span class="lock-banner-cta-sub">curated guide — hosted &amp; reviewed</span>
       </a>
     </div>
   </div>
