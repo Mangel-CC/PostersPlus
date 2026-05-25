@@ -803,14 +803,29 @@ async def remove_server_header(request: Request, call_next):
 
 @app.get("/server-caps")
 async def server_caps(access_key: str = ""):
-    if _cfg.ACCESS_KEY and not hmac.compare_digest(access_key, _cfg.ACCESS_KEY):
-        raise HTTPException(status_code=403, detail="Unauthorized")
+    # Phase 11 follow-up: /server-caps is anonymous so the configurator
+    # can boot without an access_key and present preset-only mode to public
+    # visitors. `access_key_required` tells the UI whether the operator
+    # has a key configured (i.e. should lock the advanced controls), and
+    # `access_key_valid` reports whether the supplied key matches — so
+    # tenants can paste their key and watch the UI unlock without the
+    # backend having to leak the secret. The real security boundary is
+    # /poster, which still rejects a missing or wrong access_key.
+    access_key_required = bool(_cfg.ACCESS_KEY)
+    if access_key_required:
+        access_key_valid = bool(
+            access_key and hmac.compare_digest(access_key, _cfg.ACCESS_KEY)
+        )
+    else:
+        access_key_valid = True   # no lock configured → everything open
     return {
         "tmdb_key_set":          bool(_cfg.SERVER_TMDB_KEY),
         "mdblist_key_set":       bool(_cfg.SERVER_MDBLIST_KEY),
         "aiostreams_configured": bool(_cfg.AIOSTREAMS_URL and _cfg.AIOSTREAMS_AUTH),
         "preset_enabled":        _cfg.PRESET_ENABLED,
         "presets":               preset_names() if _cfg.PRESET_ENABLED else [],
+        "access_key_required":   access_key_required,
+        "access_key_valid":      access_key_valid,
     }
 
 
@@ -915,9 +930,13 @@ async def readiness_probe():
 
 
 @app.get("/", response_class=HTMLResponse)
-async def get_configurator(access_key: str = ""):
-    if _cfg.ACCESS_KEY and not hmac.compare_digest(access_key, _cfg.ACCESS_KEY):
-        raise HTTPException(status_code=403, detail="Unauthorized. Provide ?access_key=<key>")
+async def get_configurator():
+    # Anonymous (Phase 11 follow-up). The configurator page itself is
+    # safe to serve to anyone: the JS detects whether the server requires
+    # an access_key and, when it does, locks every control that drives
+    # /poster output until the user enters a valid key. /poster keeps its
+    # access_key gate server-side, so this is purely a UX surface — the
+    # security boundary doesn't move.
     return HTMLResponse(content=_configurator_html or _load_configurator_html())
 
 
@@ -925,14 +944,85 @@ async def get_configurator(access_key: str = ""):
 # Search endpoint
 # ---------------------------------------------------------------------------
 
+def _gate_anonymous_tmdb_proxy(access_key: str) -> None:
+    """Phase 11 follow-up. When ACCESS_KEY is configured, /search and
+    /resolve-imdb are anonymous only if PRESET_ENABLED (i.e. the public
+    preset flow actually needs the title picker for anonymous users).
+    On instances without presets, the original access_key gate stays so
+    we don't expose the server TMDB key to unthrottled public traffic
+    against a backend that has no anonymous user-facing endpoint."""
+    if not _cfg.ACCESS_KEY:
+        return                                       # nothing gated
+    if _cfg.PRESET_ENABLED:
+        return                                       # anonymous OK
+    if access_key and hmac.compare_digest(access_key, _cfg.ACCESS_KEY):
+        return                                       # tenant key OK
+    raise HTTPException(status_code=403, detail="Unauthorized")
+
+
+async def _anonymous_tmdb_rate_limit(tmdb_key: str, access_key: str) -> None:
+    """Phase 11 follow-up. /search and /resolve-imdb are anonymous (when
+    PRESET_ENABLED) so the public preset flow can use the title picker,
+    but that means a public visitor can hit them and burn the operator's
+    server TMDB quota.
+
+    Three buckets, in priority order:
+
+      * Caller-supplied tmdb_key → per-key bucket sized by RATE_LIMIT_RPS
+        (default 0 = unlimited; caller's own TMDB quota is the backstop).
+      * Valid access_key (authenticated tenant relying on server's TMDB
+        key) → per-access-key bucket sized by RATE_LIMIT_RPS. Treats
+        each tenant as its own bucket so a noisy tenant can't drag
+        others down, but doesn't apply the anonymous floor — they paid
+        for higher throughput by authenticating.
+      * Anonymous (no tmdb_key, no valid access_key) → shared
+        "anonymous" bucket sized by ANONYMOUS_TMDB_RPS (default 5/s).
+        Independent of RATE_LIMIT_RPS so the floor applies even when
+        the operator hasn't configured a poster rate limit.
+    """
+    if tmdb_key:
+        if _cfg.RATE_LIMIT_RPS <= 0:
+            return
+        tenant_id = hashlib.sha256(tmdb_key.encode("utf-8")).hexdigest()[:16]
+        rps = _cfg.RATE_LIMIT_RPS
+    elif (
+        _cfg.ACCESS_KEY
+        and access_key
+        and hmac.compare_digest(access_key, _cfg.ACCESS_KEY)
+    ):
+        if _cfg.RATE_LIMIT_RPS <= 0:
+            return
+        tenant_id = hashlib.sha256(access_key.encode("utf-8")).hexdigest()[:16]
+        rps = _cfg.RATE_LIMIT_RPS
+    else:
+        if _cfg.ANONYMOUS_TMDB_RPS <= 0:
+            return
+        tenant_id = "anonymous"
+        rps = _cfg.ANONYMOUS_TMDB_RPS
+    allowed, retry_after = await coord.check_rate_limit(tenant_id, rps)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded ({rps} req/s)",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
 @app.get("/search")
 async def search_proxy(
     q: str,
     tmdb_key: str = "",
     access_key: str = "",
 ):
-    if _cfg.ACCESS_KEY and not hmac.compare_digest(access_key, _cfg.ACCESS_KEY):
-        raise HTTPException(status_code=403, detail="Unauthorized")
+    # Auth is conditional (Phase 11 follow-up). /search is anonymous
+    # only when the operator has opted into the public preset flow
+    # (PRESET_ENABLED), because the title picker is what populates the
+    # imdb_id for a /p URL. On instances without presets there's no
+    # anonymous user-facing flow, so the original access_key gate stays
+    # — otherwise a public visitor could burn the server TMDB quota
+    # against an instance that has no anonymous endpoint to support.
+    _gate_anonymous_tmdb_proxy(access_key)
+    await _anonymous_tmdb_rate_limit(tmdb_key, access_key)
     if len(q) > 200:
         raise HTTPException(status_code=400, detail="Query too long")
 
@@ -961,9 +1051,10 @@ async def resolve_imdb(
     tmdb_key: str = "",
     access_key: str = "",
 ):
-    if _cfg.ACCESS_KEY and not hmac.compare_digest(access_key, _cfg.ACCESS_KEY):
-        raise HTTPException(status_code=403, detail="Unauthorized")
-
+    # Pairs with /search; same conditional-auth model. Anonymous only
+    # when PRESET_ENABLED is true; otherwise the access_key gate stays.
+    _gate_anonymous_tmdb_proxy(access_key)
+    await _anonymous_tmdb_rate_limit(tmdb_key, access_key)
     _check_tmdb_id(tmdb_id)
     _check_type(type)
 

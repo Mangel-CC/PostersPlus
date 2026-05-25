@@ -18,6 +18,9 @@ env/
 # Docker runtime cache volume
 postersplus-cache/
 
+# Local dev runner output (run-local.py writes SQLite, blobs, prom state here)
+.local-cache/
+
 # OS
 .DS_Store
 Thumbs.db

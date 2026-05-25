@@ -940,6 +940,89 @@
   .url-param-val { color: var(--silver); }
   .url-placeholder { color: var(--gold-dim); }
 
+  /* ── PRESET-ONLY LOCK ── */
+  .lock-banner {
+    display: none;
+    margin: 14px 16px 18px;
+    padding: 14px 16px;
+    background: var(--black);
+    border: 1px solid var(--gold-dim);
+    border-left: 3px solid var(--gold);
+  }
+  body.preset-only-mode .lock-banner { display: block; }
+  .lock-banner-title {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 8px;
+  }
+  .lock-banner-body {
+    font-family: var(--mono);
+    font-size: 10px;
+    line-height: 1.55;
+    color: var(--silver-dim);
+    margin-bottom: 12px;
+  }
+  .lock-banner-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .lock-banner-row input {
+    flex: 1;
+    padding: 7px 10px;
+    background: var(--black2);
+    border: 1px solid var(--border);
+    color: var(--silver);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.05em;
+  }
+  .lock-banner-status {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    min-width: 70px;
+    text-align: right;
+  }
+  .lock-banner-status.ok    { color: #6cd084; }
+  .lock-banner-status.err   { color: #d06c6c; }
+  .lock-banner-status.info  { color: var(--silver-dim); }
+
+  /* Anything below Core Config (i.e. the visual configuration sections)
+     is locked out when preset-only-mode is active. The user can still
+     SEE the sections but can't interact with them — a discoverability
+     win for tenants ("look what you get with a key") at zero cost. */
+  body.preset-only-mode .section ~ .section .section-body,
+  body.preset-only-mode .section ~ .section .section-header {
+    opacity: 0.35;
+    pointer-events: none;
+    user-select: none;
+  }
+  /* Inside Core Config: lock the per-user knobs (TMDB / MDBlist keys and
+     language) but keep search + preset dropdown editable. */
+  body.preset-only-mode #cfg-tmdb-key,
+  body.preset-only-mode #cfg-mdblist-key,
+  body.preset-only-mode #cfg-language {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+  body.preset-only-mode #cfg-tmdb-key + .field-hint,
+  body.preset-only-mode #cfg-mdblist-key + .field-hint {
+    opacity: 0.4;
+  }
+  /* Hide the URL import row entirely in lock mode — importing a /poster
+     URL would silently drop its params, and a preset URL doesn't need
+     the import box (the dropdown does the same job in one click). */
+  body.preset-only-mode #import-input,
+  body.preset-only-mode #import-row,
+  body.preset-only-mode .import-modal,
+  body.preset-only-mode .import-toggle { display: none !important; }
+
   /* ── BUTTONS ── */
   .btn-row {
     display: flex;
@@ -1251,6 +1334,30 @@
 
         <input type="hidden" id="cfg-domain" value="">
         <input type="hidden" id="cfg-access-key" value="">
+
+        <!-- Preset-only lock banner (Phase 11 follow-up). Shown only when
+             /server-caps reports access_key_required=true and the supplied
+             key is missing/invalid. Anonymous public visitors land here:
+             they can pick a preset (the only emitted URL form is the
+             anonymous /p/...) but every control that drives /poster
+             output is dimmed and pointer-disabled via .preset-only-mode.
+             Tenants paste their access key into the unlock input; the JS
+             re-validates against /server-caps and removes the body class. -->
+        <div class="lock-banner" id="lock-banner">
+          <div class="lock-banner-title">Public access — preset selection only</div>
+          <div class="lock-banner-body">
+            Pick a preset below to generate a shareable poster URL. Custom
+            rendering (sliders, weights, sash priority) is reserved for
+            tenants. Paste your access key to unlock.
+          </div>
+          <div class="lock-banner-row">
+            <input type="text" id="cfg-access-key-input"
+                   placeholder="access key"
+                   autocomplete="off" spellcheck="false"
+                   oninput="onAccessKeyInput()">
+            <span class="lock-banner-status" id="lock-banner-status"></span>
+          </div>
+        </div>
 
         <!-- 1. CORE CONFIG -->
         <div class="section">
@@ -1669,6 +1776,10 @@ const qs = new URLSearchParams(window.location.search);
   const ak = qs.get('access_key') || localStorage.getItem('postersplus_access_key') || '';
   document.getElementById('cfg-access-key').value = ak;
   if (ak) localStorage.setItem('postersplus_access_key', ak);
+  // Mirror into the lock-banner visible input so tenants returning from
+  // a previous session see their key already populated.
+  const visible = document.getElementById('cfg-access-key-input');
+  if (visible && ak) visible.value = ak;
 })();
 
 const MOVIE_SOURCES = ['letterboxd','trakt','tomatoes','popcorn','imdb','metacritic','metacriticuser','tmdb','rogerebert','myanimelist'];
@@ -1704,7 +1815,7 @@ const SASH_SLOTS = [
 let sashOrder    = SASH_SLOTS.map(s => s.id);
 let sashDisabled = new Set();   // IDs explicitly disabled via ✕ button
 let mediaType = 'movie', resolvedImdbId = '', resolvedTmdbId = '';
-let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false, preset_enabled: false, presets: [] };
+let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false, preset_enabled: false, presets: [], access_key_required: false, access_key_valid: true };
 let searchDebounce = null, previewDebounce = null, previewLoading = false, imdbResolvePending = false;
 
 const previewPanel = document.querySelector('.preview-panel');
@@ -1841,6 +1952,71 @@ function updateKeyBadges() {
       }
     }
   }
+
+  // Phase 11 follow-up: preset-only-mode is the public-host posture.
+  // When the server has ACCESS_KEY set and we don't have a valid one,
+  // every /poster-driving control is dimmed via body.preset-only-mode
+  // and the "Custom" option is removed from the preset dropdown so the
+  // only emittable URL form is the anonymous /p/{preset}/.... A tenant
+  // with a key types it into the lock banner and the body class drops.
+  applyLockMode();
+}
+
+function applyLockMode() {
+  const lock = serverCaps.access_key_required && !serverCaps.access_key_valid;
+  document.body.classList.toggle('preset-only-mode', lock);
+
+  // The "Custom" option in the preset dropdown is option index 0
+  // (value=""). When locked AND presets are enabled, hide it so users
+  // can't pick a setting that would emit a /poster URL with
+  // default-but-invisible params. When presets are NOT enabled, leave
+  // it alone — forcing "default" while the backend serves 404 on /p
+  // routes is worse UX than the visible lock banner alone.
+  const presetField = document.getElementById('cfg-preset');
+  if (presetField && serverCaps.preset_enabled) {
+    const customOpt = presetField.querySelector('option[value=""]');
+    if (customOpt) customOpt.hidden = lock;
+    if (lock && (!presetField.value || presetField.value === '')) {
+      presetField.value = 'default';
+      refreshPresetUiState();
+      build();
+    }
+  }
+
+  // Lock-banner status indicator.
+  const statusEl = document.getElementById('lock-banner-status');
+  if (statusEl) {
+    if (!serverCaps.access_key_required) {
+      statusEl.textContent = '';
+      statusEl.className = 'lock-banner-status';
+    } else if (serverCaps.access_key_valid) {
+      statusEl.textContent = 'UNLOCKED';
+      statusEl.className = 'lock-banner-status ok';
+    } else if (vEl('cfg-access-key')) {
+      statusEl.textContent = 'INVALID';
+      statusEl.className = 'lock-banner-status err';
+    } else {
+      statusEl.textContent = 'LOCKED';
+      statusEl.className = 'lock-banner-status info';
+    }
+  }
+}
+
+// Debounced re-validation when the user types into the lock-banner input.
+let _accessKeyDebounce = null;
+function onAccessKeyInput() {
+  const visible = document.getElementById('cfg-access-key-input');
+  const hidden  = document.getElementById('cfg-access-key');
+  if (!visible || !hidden) return;
+  const value = visible.value.trim();
+  hidden.value = value;
+  // Persist so a page reload doesn't re-lock a tenant who's already
+  // entered their key. localStorage was already the canonical storage
+  // for cfg-access-key in the upstream flow.
+  if (value) localStorage.setItem('postersplus_access_key', value);
+  else       localStorage.removeItem('postersplus_access_key');
+  clearTimeout(_accessKeyDebounce);
+  _accessKeyDebounce = setTimeout(() => { fetchServerCaps(); }, 250);
 }
 
 function updateBadgeModeHint() {
@@ -2467,6 +2643,11 @@ function resetDefaults() {
   localStorage.removeItem('postersplus_sash_order');
   buildSashList();
   refreshPresetUiState();
+  // Re-apply preset-only lock if active. resetDefaults() flipped
+  // cfg-preset back to the default-selected Custom option ("") which
+  // would otherwise emit a /poster URL — locked anonymous users
+  // must stay on a preset.
+  applyLockMode();
   build();
   collapsePreview();
   setLog('preview-log', 'Reset to defaults. API keys preserved.', 'info');

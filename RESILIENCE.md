@@ -668,3 +668,36 @@ Plus two follow-ups raised in the final pass and fixed pre-clean-review:
 - **Preview disabled after importing a /p URL.** `loadPreview` and `queuePreviewReload` required `resolvedTmdbId`, but preset URLs only carry imdb_id. **Fixed:** preset mode requires only `resolvedImdbId`; the server-side resolver handles the rest.
 
 Phase 11 ready to merge once user signs and commits.
+
+### Phase 11 — public-tier UX lock (follow-up)
+
+User direction: "public users should be able to hit `/` without a 403, but only be able to pick a preset — everything else that changes the rendered poster must be locked." The original Phase 11 model required `ACCESS_KEY` to be unset on public hosts; the follow-up makes the configurator anonymous-friendly while preserving the security boundary at `/poster`.
+
+**Backend changes:**
+
+- `/`, `/server-caps`, `/search`, `/resolve-imdb` — drop the unconditional `access_key` gate.
+- `/server-caps` — returns `access_key_required` (whether the operator has `ACCESS_KEY` set) and `access_key_valid` (whether the supplied key matches), so the UI can tell when to enter preset-only mode.
+- `/poster` — gate unchanged. The real security boundary doesn't move.
+- `/search` + `/resolve-imdb` — conditional gating: anonymous only when `PRESET_ENABLED=true` (the public preset flow needs the title picker). Instances with `ACCESS_KEY` set but presets disabled keep the original access_key gate so the operator's server TMDB key isn't exposed to a deployment with no anonymous user-facing flow.
+- New `ANONYMOUS_TMDB_RPS` config (default 5/s) — independent of `RATE_LIMIT_RPS`. Anonymous `/search`/`/resolve-imdb` traffic uses a shared "anonymous" bucket sized by this floor so an operator who didn't set `RATE_LIMIT_RPS` doesn't accidentally leak unthrottled access to the server TMDB quota. Authenticated callers (valid `access_key`, or caller-supplied `tmdb_key`) get per-tenant buckets sized by `RATE_LIMIT_RPS` instead — they're not subject to the anonymous floor.
+
+**Frontend changes (`configurator.html`):**
+
+- New "Public access — preset selection only" banner with an unlock input. The banner is shown only when `body.preset-only-mode` is active (i.e. server requires key AND we don't have a valid one).
+- `body.preset-only-mode` CSS: dims and pointer-disables every section after Core Config (rating, sash, logo, badges, weights) plus the TMDB/MDBlist/language fields inside Core Config. Search box + preset dropdown stay editable.
+- `body.preset-only-mode` hides the URL-import row entirely — importing a `/poster` URL into lock mode would silently drop its params.
+- `applyLockMode()` toggles the body class on every `/server-caps` response, hides the "Custom" preset option when locked (only when presets are enabled), and forces `default` as the active preset to bootstrap a usable URL.
+- `onAccessKeyInput()` syncs the visible unlock input → hidden `cfg-access-key`, persists to localStorage, debounces a fresh `/server-caps?access_key=...` fetch. Status indicator in the banner shows `LOCKED` / `INVALID` / `UNLOCKED`.
+- `resetDefaults()` re-applies the lock at the end so a click of Reset on a locked instance can't escape preset mode by reverting `cfg-preset` to the (hidden) Custom option.
+
+**Codex review pass count:** 6 iterations to clean. Findings + fixes:
+
+1. **[P1] Anonymous TMDB proxies had no rate-limit.** `/search` and `/resolve-imdb` ran unauthenticated against the server TMDB key with no throttle when `RATE_LIMIT_RPS=0` (the default). **Fixed:** new `ANONYMOUS_TMDB_RPS` floor (default 5/s), independent of `RATE_LIMIT_RPS`.
+2. **[P2] Forced preset when presets disabled.** `applyLockMode` set the preset to `default` even on instances with `PRESET_ENABLED=false`, generating `/p/default/...` URLs that 404'd. **Fixed:** preset is only forced when `serverCaps.preset_enabled` is true.
+3. **[P1] /search + /resolve-imdb anonymous even when presets disabled.** No reason for these to be public on a non-preset deployment. **Fixed:** new `_gate_anonymous_tmdb_proxy()` keeps the access_key requirement when `PRESET_ENABLED=false`.
+4. **[P3] Stale Prometheus state across local runs.** `run-local.py` reused `.local-cache/prom` without clearing old `*.db` files. **Fixed:** mirrors the container entrypoint's wipe-on-startup behaviour.
+5. **[P2] Authenticated tenant put in anonymous bucket.** A tenant supplying `access_key` but relying on the server's TMDB key was rate-limited at 5/s (anonymous floor) instead of `RATE_LIMIT_RPS`. **Fixed:** rate-limit helper now keys per-access_key when a valid key is supplied — only purely anonymous traffic uses the floor.
+6. **[P2] Reset bypassed lock.** `resetDefaults()` flipped `cfg-preset` to the hidden Custom option, then Copy URL emitted `/poster?...` until next `/server-caps` fetch. **Fixed:** `resetDefaults()` re-applies `applyLockMode()` before rebuilding the URL.
+7. **[P3] `.local-cache/` not gitignored.** **Fixed:** added entry to `.gitignore`.
+
+Final pass clean. Phase 11 follow-up ready to merge.
