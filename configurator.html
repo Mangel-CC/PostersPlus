@@ -966,32 +966,48 @@
     color: var(--silver-dim);
     margin-bottom: 12px;
   }
-  .lock-banner-row {
+  .lock-banner-cta-row {
     display: flex;
-    align-items: center;
-    gap: 10px;
+    gap: 8px;
+    flex-wrap: wrap;
   }
-  .lock-banner-row input {
-    flex: 1;
-    padding: 7px 10px;
+  .lock-banner-cta {
+    flex: 1 1 0;
+    min-width: 130px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 9px 12px;
     background: var(--black2);
     border: 1px solid var(--border);
-    color: var(--silver);
+    text-decoration: none;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .lock-banner-cta:hover {
+    background: #161616;
+    border-color: var(--gold-dim);
+  }
+  .lock-banner-cta.primary {
+    border-color: var(--gold-dim);
+  }
+  .lock-banner-cta.primary:hover {
+    border-color: var(--gold);
+  }
+  .lock-banner-cta-label {
     font-family: var(--mono);
     font-size: 10px;
-    letter-spacing: 0.05em;
-  }
-  .lock-banner-status {
-    font-family: var(--mono);
-    font-size: 9px;
-    letter-spacing: 0.2em;
+    font-weight: 600;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
-    min-width: 70px;
-    text-align: right;
+    color: var(--gold);
   }
-  .lock-banner-status.ok    { color: #6cd084; }
-  .lock-banner-status.err   { color: #d06c6c; }
-  .lock-banner-status.info  { color: var(--silver-dim); }
+  .lock-banner-cta-sub {
+    font-family: var(--mono);
+    font-size: 8px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--silver-dim);
+  }
 
   /* Anything below Core Config (i.e. the visual configuration sections)
      is locked out when preset-only-mode is active. The user can still
@@ -1335,27 +1351,32 @@
         <input type="hidden" id="cfg-domain" value="">
         <input type="hidden" id="cfg-access-key" value="">
 
-        <!-- Preset-only lock banner (Phase 11 follow-up). Shown only when
-             /server-caps reports access_key_required=true and the supplied
-             key is missing/invalid. Anonymous public visitors land here:
-             they can pick a preset (the only emitted URL form is the
-             anonymous /p/...) but every control that drives /poster
-             output is dimmed and pointer-disabled via .preset-only-mode.
-             Tenants paste their access key into the unlock input; the JS
-             re-validates against /server-caps and removes the body class. -->
+        <!-- Public-tier informational banner (Phase 11 follow-up).
+             Shown whenever /server-caps reports preset_enabled=true —
+             the public-tier marker. Tenants who want custom rendering
+             run a private instance (separate URL); they never need to
+             "unlock" the public configurator with a key, so there's no
+             input here. Two CTAs explain how to get one. -->
         <div class="lock-banner" id="lock-banner">
           <div class="lock-banner-title">Public access — preset selection only</div>
           <div class="lock-banner-body">
-            Pick a preset below to generate a shareable poster URL. Custom
-            rendering (sliders, weights, sash priority) is reserved for
-            tenants. Paste your access key to unlock.
+            To keep the public instance scalable, customization is limited
+            to the presets below. For full per-poster control (sliders,
+            weights, sash priority), run your own instance:
           </div>
-          <div class="lock-banner-row">
-            <input type="text" id="cfg-access-key-input"
-                   placeholder="access key"
-                   autocomplete="off" spellcheck="false"
-                   oninput="onAccessKeyInput()">
-            <span class="lock-banner-status" id="lock-banner-status"></span>
+          <div class="lock-banner-cta-row">
+            <a class="lock-banner-cta primary"
+               href="https://store.elfhosted.com"
+               target="_blank" rel="noopener noreferrer">
+              <span class="lock-banner-cta-label">Get a private instance</span>
+              <span class="lock-banner-cta-sub">elfhosted.com — managed</span>
+            </a>
+            <a class="lock-banner-cta"
+               href="https://github.com/UmbraProjects/PostersPlus"
+               target="_blank" rel="noopener noreferrer">
+              <span class="lock-banner-cta-label">Self-host</span>
+              <span class="lock-banner-cta-sub">github.com — upstream source</span>
+            </a>
           </div>
         </div>
 
@@ -1773,13 +1794,13 @@ const qs = new URLSearchParams(window.location.search);
 (function deriveAuthFromUrl() {
   const domain = window.location.origin;
   document.getElementById('cfg-domain').value = domain;
+  // cfg-access-key is still populated from URL/localStorage for legacy
+  // tenant tooling that points at a private instance with ?access_key=…
+  // in the URL. On a public-tier deployment the field stays empty and
+  // the preset-only lock banner handles the UX.
   const ak = qs.get('access_key') || localStorage.getItem('postersplus_access_key') || '';
   document.getElementById('cfg-access-key').value = ak;
   if (ak) localStorage.setItem('postersplus_access_key', ak);
-  // Mirror into the lock-banner visible input so tenants returning from
-  // a previous session see their key already populated.
-  const visible = document.getElementById('cfg-access-key-input');
-  if (visible && ak) visible.value = ak;
 })();
 
 const MOVIE_SOURCES = ['letterboxd','trakt','tomatoes','popcorn','imdb','metacritic','metacriticuser','tmdb','rogerebert','myanimelist'];
@@ -1815,7 +1836,7 @@ const SASH_SLOTS = [
 let sashOrder    = SASH_SLOTS.map(s => s.id);
 let sashDisabled = new Set();   // IDs explicitly disabled via ✕ button
 let mediaType = 'movie', resolvedImdbId = '', resolvedTmdbId = '';
-let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false, preset_enabled: false, presets: [], access_key_required: false, access_key_valid: true };
+let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false, preset_enabled: false, presets: [], access_key_valid: true };
 let searchDebounce = null, previewDebounce = null, previewLoading = false, imdbResolvePending = false;
 
 const previewPanel = document.querySelector('.preview-panel');
@@ -1892,6 +1913,9 @@ function updateWeightRange(el, outId) {
 
 async function fetchServerCaps() {
   try {
+    // Pass cfg-access-key (populated from URL/localStorage at boot) so
+    // the legacy ?access_key=… escape hatch can unlock the configurator
+    // on a public-tier instance for someone routing a tenant client at it.
     const ak = vEl('cfg-access-key');
     const url = ak ? `/server-caps?access_key=${encodeURIComponent(ak)}` : '/server-caps';
     const resp = await fetch(url);
@@ -1970,17 +1994,24 @@ function updateKeyBadges() {
 }
 
 function applyLockMode() {
-  const lock = serverCaps.access_key_required && !serverCaps.access_key_valid;
+  // The lock is the public-tier marker: on a deployment with
+  // preset_enabled=true the configurator drops into preset-only mode.
+  // Tenants who want custom rendering run a private instance, so the
+  // banner shows CTAs (store + self-host) instead of an unlock input.
+  //
+  // Legacy escape hatch: a URL like ?access_key=<valid-key> still
+  // unlocks the UI on a preset-enabled instance — the access_key flows
+  // through cfg-access-key into the /server-caps validation and
+  // access_key_valid clears the lock. Useful if someone deliberately
+  // routes a tenant client at the public host; not surfaced in the UI.
+  const lock = !!serverCaps.preset_enabled && !serverCaps.access_key_valid;
   document.body.classList.toggle('preset-only-mode', lock);
 
-  // The "Custom" option in the preset dropdown is option index 0
-  // (value=""). When locked AND presets are enabled, hide it so users
-  // can't pick a setting that would emit a /poster URL with
-  // default-but-invisible params. When presets are NOT enabled, leave
-  // it alone — forcing "default" while the backend serves 404 on /p
-  // routes is worse UX than the visible lock banner alone.
+  // Hide the "Custom" option in the preset dropdown so the locked UI
+  // can only emit /p/... URLs; force "default" as the active preset
+  // if nothing else is selected yet.
   const presetField = document.getElementById('cfg-preset');
-  if (presetField && serverCaps.preset_enabled) {
+  if (presetField) {
     const customOpt = presetField.querySelector('option[value=""]');
     if (customOpt) customOpt.hidden = lock;
     if (lock && (!presetField.value || presetField.value === '')) {
@@ -1989,41 +2020,6 @@ function applyLockMode() {
       build();
     }
   }
-
-  // Lock-banner status indicator.
-  const statusEl = document.getElementById('lock-banner-status');
-  if (statusEl) {
-    if (!serverCaps.access_key_required) {
-      statusEl.textContent = '';
-      statusEl.className = 'lock-banner-status';
-    } else if (serverCaps.access_key_valid) {
-      statusEl.textContent = 'UNLOCKED';
-      statusEl.className = 'lock-banner-status ok';
-    } else if (vEl('cfg-access-key')) {
-      statusEl.textContent = 'INVALID';
-      statusEl.className = 'lock-banner-status err';
-    } else {
-      statusEl.textContent = 'LOCKED';
-      statusEl.className = 'lock-banner-status info';
-    }
-  }
-}
-
-// Debounced re-validation when the user types into the lock-banner input.
-let _accessKeyDebounce = null;
-function onAccessKeyInput() {
-  const visible = document.getElementById('cfg-access-key-input');
-  const hidden  = document.getElementById('cfg-access-key');
-  if (!visible || !hidden) return;
-  const value = visible.value.trim();
-  hidden.value = value;
-  // Persist so a page reload doesn't re-lock a tenant who's already
-  // entered their key. localStorage was already the canonical storage
-  // for cfg-access-key in the upstream flow.
-  if (value) localStorage.setItem('postersplus_access_key', value);
-  else       localStorage.removeItem('postersplus_access_key');
-  clearTimeout(_accessKeyDebounce);
-  _accessKeyDebounce = setTimeout(() => { fetchServerCaps(); }, 250);
 }
 
 function updateBadgeModeHint() {

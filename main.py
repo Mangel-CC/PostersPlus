@@ -803,28 +803,35 @@ async def remove_server_header(request: Request, call_next):
 
 @app.get("/server-caps")
 async def server_caps(access_key: str = ""):
-    # Phase 11 follow-up: /server-caps is anonymous so the configurator
-    # can boot without an access_key and present preset-only mode to public
-    # visitors. `access_key_required` tells the UI whether the operator
-    # has a key configured (i.e. should lock the advanced controls), and
-    # `access_key_valid` reports whether the supplied key matches — so
-    # tenants can paste their key and watch the UI unlock without the
-    # backend having to leak the secret. The real security boundary is
-    # /poster, which still rejects a missing or wrong access_key.
-    access_key_required = bool(_cfg.ACCESS_KEY)
-    if access_key_required:
-        access_key_valid = bool(
-            access_key and hmac.compare_digest(access_key, _cfg.ACCESS_KEY)
-        )
-    else:
-        access_key_valid = True   # no lock configured → everything open
+    # Anonymous (Phase 11 follow-up). Reports what this instance can do
+    # so the configurator can adapt: on a public-tier deployment
+    # (preset_enabled=true) the UI drops into preset-only mode with an
+    # informational banner; on a private/self-hosted instance
+    # (preset_enabled=false) the full configurator is available.
+    #
+    # access_key_valid is reported as a legacy escape hatch — there's no
+    # UI input for it on the configurator (tenants run their own
+    # instance), but a URL like ?access_key=… still works if someone
+    # routes a tenant client at the public host. The real security
+    # boundary is /poster, which gates server-side independently.
+    # `access_key_valid` here is the escape-hatch signal for the
+    # configurator lock — only true when there's a configured server key
+    # AND the supplied key matches. When ACCESS_KEY is unset, there's no
+    # escape hatch on offer (and on a preset-enabled instance that means
+    # the lock stays on, which is what we want — the public-tier UX
+    # shouldn't accidentally unlock just because the operator left the
+    # server key blank).
+    access_key_valid = bool(
+        _cfg.ACCESS_KEY
+        and access_key
+        and hmac.compare_digest(access_key, _cfg.ACCESS_KEY)
+    )
     return {
         "tmdb_key_set":          bool(_cfg.SERVER_TMDB_KEY),
         "mdblist_key_set":       bool(_cfg.SERVER_MDBLIST_KEY),
         "aiostreams_configured": bool(_cfg.AIOSTREAMS_URL and _cfg.AIOSTREAMS_AUTH),
         "preset_enabled":        _cfg.PRESET_ENABLED,
         "presets":               preset_names() if _cfg.PRESET_ENABLED else [],
-        "access_key_required":   access_key_required,
         "access_key_valid":      access_key_valid,
     }
 
@@ -930,13 +937,23 @@ async def readiness_probe():
 
 
 @app.get("/", response_class=HTMLResponse)
-async def get_configurator():
-    # Anonymous (Phase 11 follow-up). The configurator page itself is
-    # safe to serve to anyone: the JS detects whether the server requires
-    # an access_key and, when it does, locks every control that drives
-    # /poster output until the user enters a valid key. /poster keeps its
-    # access_key gate server-side, so this is purely a UX surface — the
-    # security boundary doesn't move.
+async def get_configurator(access_key: str = ""):
+    # Conditionally anonymous (Phase 11 follow-up):
+    #
+    # * Public-tier (PRESET_ENABLED=true) — anonymous. The JS shows a
+    #   preset-only banner with CTAs to a private instance / self-host;
+    #   /poster keeps its server-side ACCESS_KEY gate so the lock can't
+    #   be bypassed.
+    # * Private-tier (PRESET_ENABLED=false) — the original behaviour
+    #   stands: a configured ACCESS_KEY still gates the configurator
+    #   itself, since there's no visible unlock UI for tenants to enter
+    #   it through. Tenants reach the page via ?access_key=… as before.
+    if (
+        _cfg.ACCESS_KEY
+        and not _cfg.PRESET_ENABLED
+        and not hmac.compare_digest(access_key, _cfg.ACCESS_KEY)
+    ):
+        raise HTTPException(status_code=403, detail="Unauthorized. Provide ?access_key=<key>")
     return HTMLResponse(content=_configurator_html or _load_configurator_html())
 
 
@@ -1116,8 +1133,24 @@ async def get_poster(
     logo_language: str | None = None,
     sash_priority: str | None = None,
 ):
-    if _cfg.ACCESS_KEY and not hmac.compare_digest(access_key, _cfg.ACCESS_KEY):
-        raise HTTPException(status_code=403, detail="Unauthorized, your access key is not valid for this instance.")
+    # Auth gate matches the configurator's preset-only model. When
+    # PRESET_ENABLED=true this is a public-tier deployment and /poster
+    # is restricted to authenticated tenants — anonymous custom
+    # rendering is reserved for /p/{preset}/... so the UI lock can't
+    # be bypassed by hand-rolled URLs. When ACCESS_KEY is unset on a
+    # preset-enabled instance there's no key to validate against and
+    # /poster is effectively disabled (only /p works) — fail loud
+    # rather than silently allowing anonymous custom renders.
+    if _cfg.PRESET_ENABLED or _cfg.ACCESS_KEY:
+        if not (
+            _cfg.ACCESS_KEY
+            and access_key
+            and hmac.compare_digest(access_key, _cfg.ACCESS_KEY)
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Unauthorized, your access key is not valid for this instance.",
+            )
 
     _check_tmdb_id(tmdb_id)
     _check_imdb_id(imdb_id)

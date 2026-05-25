@@ -701,3 +701,36 @@ User direction: "public users should be able to hit `/` without a 403, but only 
 7. **[P3] `.local-cache/` not gitignored.** **Fixed:** added entry to `.gitignore`.
 
 Final pass clean. Phase 11 follow-up ready to merge.
+
+### Phase 11 — informational lock banner (re-design)
+
+User direction: drop the access-key unlock UI entirely. "Users wanting more customizability can get a private instance (link to elfhosted store) or self-host (link to upstream github)." The public instance is the public instance — there's no "key escape" UX path.
+
+**Deployment model now baked in:**
+
+- Public-tier instance: `PRESET_ENABLED=true` + `ACCESS_KEY=…`. Configurator is always preset-only; lock banner shows two CTAs. /poster requires the operator's access_key — anonymous custom rendering is impossible.
+- Private-tier instance: `PRESET_ENABLED=false`. Configurator is full-featured. Access via `?access_key=…` URL when the operator gates it, open otherwise.
+- Misconfigured (`PRESET_ENABLED=true` + `ACCESS_KEY` unset): UI locks (correct), and /poster also locks (newly enforced) so the policy and the UI don't drift. Only /p/{preset}/… serves traffic.
+
+**Code changes:**
+
+- Lock banner: replaced the access-key input + status indicator with two CTAs — "Get a private instance" → `store.elfhosted.com`, "Self-host" → `github.com/UmbraProjects/PostersPlus`. CSS adds `.lock-banner-cta` and `.lock-banner-cta-row` styles.
+- `applyLockMode()`: lock condition is now `preset_enabled && !access_key_valid`. The URL-param escape hatch (`/?access_key=…`) still works for legacy tenant tooling but isn't surfaced in the UI.
+- `onAccessKeyInput()` and the `cfg-access-key-input` visible field deleted.
+- `/server-caps`: `access_key_valid` is `true` only when ACCESS_KEY is configured AND the supplied key matches. When ACCESS_KEY is unset there's no escape hatch on offer, so we report `false` to keep preset-only mode pinned.
+- `/`: conditionally anonymous — public-tier instances (`PRESET_ENABLED=true`) serve the configurator HTML to anyone; private-tier instances with `ACCESS_KEY` set keep the original access_key gate so users land on a 403 unless they reach the page via `?access_key=…`.
+- `/poster`: gate widened to fire when *either* `PRESET_ENABLED` or `ACCESS_KEY` is set, with a valid access_key as the only pass condition. Closes the loophole where `PRESET_ENABLED=true` + `ACCESS_KEY` unset would lock the UI but leave /poster wide open.
+
+**Codex review:** five iterations to clean.
+
+1. **[P1] Unlock path removed entirely.** Tenants on a preset-enabled instance arriving with `?access_key=…` were forced into preset-only mode because the lock depended only on `preset_enabled`. **Fixed:** lock condition is `preset_enabled && !access_key_valid`; the URL-param escape hatch is preserved as a legacy mechanism.
+
+2. **[P1] Preset-enabled without ACCESS_KEY left the UI unlocked.** `/server-caps` reported `access_key_valid=true` (no key configured → "valid" trivially) so the lock never engaged. **Fixed:** `access_key_valid` requires both a configured ACCESS_KEY and a matching supplied key — a missing server key gives `false`, keeping the lock on.
+
+3. **[P2] Anonymous `/` exposed access-key-protected private instances.** A fresh user on a key-gated private instance couldn't search or preview because the visible input was gone. **Fixed:** `/` is anonymous only when `PRESET_ENABLED=true`; private instances keep the original `?access_key=` gate at /.
+
+4. **[P2] UI advertised a lock that backend didn't enforce.** `PRESET_ENABLED=true` + `ACCESS_KEY` unset gave a locked UI but an open /poster. **Fixed:** /poster gate widened to fire whenever `PRESET_ENABLED` is true, requiring a valid access_key as the only pass — when ACCESS_KEY is unset there's no key that can pass and /poster is effectively disabled (only /p works).
+
+5. **Pass 5 clean.**
+
+Re-design ready to merge.
