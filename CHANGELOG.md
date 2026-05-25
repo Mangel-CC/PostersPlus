@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/elfhosted/PostersPlus/compare/v0.3.0...v0.3.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* point store CTA at the Posters+ product page ([226ee24](https://github.com/elfhosted/PostersPlus/commit/226ee245c93ef7e577878a0d9f15d3879b8a9e9c))
+* point store CTA at the Posters+ product page ([095132d](https://github.com/elfhosted/PostersPlus/commit/095132db8d4702381afd27d14903bf3e23426188))
+
 ## [0.3.0](https://github.com/elfhosted/PostersPlus/compare/v0.2.0...v0.3.0) (2026-05-25)
 
 
