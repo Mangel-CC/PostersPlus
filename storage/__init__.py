@@ -43,6 +43,8 @@ _PUBLIC_API = (
     "is_digital_release",
     "count_digital_releases",
     "add_digital_releases",
+    "get_cached_imdb_to_tmdb",
+    "set_cached_imdb_to_tmdb",
 )
 
 

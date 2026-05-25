@@ -41,6 +41,8 @@ from storage import (
     is_digital_release,
     count_digital_releases,
     add_digital_releases,
+    get_cached_imdb_to_tmdb,
+    set_cached_imdb_to_tmdb,
 )
 from storage import (
     get_cached_final_poster      as _raw_get_final_poster,

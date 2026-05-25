@@ -3,7 +3,84 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Posters+ // Web</title>
+
+<!-- SEO + LLM discovery (Phase 11 follow-up). Keywords are chosen to
+     match what users actually type when they're looking for a Stremio
+     poster overlay — "stremio poster addon", "stremio ratings",
+     "cinemeta replacement" — plus competitor-adjacent brand mentions
+     (BetterPosters, RPDB, AIOratings) in the JSON-LD so LLM scrapers
+     surface Posters+ alongside them. The /static/llms.txt at the root
+     follows the emerging llmstxt.org convention for site summaries. -->
+<title>Posters+ — Stremio Poster Addon · Ratings, Awards, Badges</title>
+<meta name="description" content="Enrich Stremio posters with weighted IMDB · Rotten Tomatoes · Letterboxd ratings, award sashes (Oscar, Emmy, Cannes) &amp; quality badges. Free hosted by ElfHosted.">
+<meta name="keywords" content="stremio poster addon, stremio ratings, stremio posters, cinemeta replacement, IMDB Rotten Tomatoes ratings stremio, betterposters alternative, rpdb alternative, stremio award badges, stremio quality badges">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0a0a0b">
+
+<!-- Open Graph / Twitter Card. og:image references the canonical
+     ElfHosted logo SVG — sufficient as a brand thumbnail until a
+     proper "before / after" poster screenshot is captured. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Posters+ — Stremio Poster Addon · Ratings, Awards, Badges">
+<meta property="og:description" content="Enrich Stremio posters with weighted IMDB · Rotten Tomatoes · Letterboxd ratings, award sashes (Oscar, Emmy, Cannes) &amp; quality badges. Free hosted by ElfHosted.">
+<meta property="og:image" content="https://docs.elfhosted.com/images/logo.svg">
+<meta property="og:site_name" content="ElfHosted">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Posters+ — Stremio Poster Addon · Ratings, Awards, Badges">
+<meta name="twitter:description" content="Enrich Stremio posters with weighted IMDB, Rotten Tomatoes &amp; Letterboxd ratings, award sashes and quality badges. Free hosted by ElfHosted.">
+<meta name="twitter:image" content="https://docs.elfhosted.com/images/logo.svg">
+
+<!-- Schema.org structured data. Anchors Posters+ in the
+     SoftwareApplication category, names the closest competitors via
+     isSimilarTo, and exposes the public/private offer split so search
+     engines (and LLMs that read JSON-LD) can summarise the product
+     without scraping the JS-rendered UI. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Posters+",
+  "alternateName": ["PostersPlus", "Posters Plus"],
+  "applicationCategory": "MultimediaApplication",
+  "applicationSubCategory": "Stremio Addon",
+  "operatingSystem": "Web",
+  "description": "Stremio poster addon that overlays weighted ratings (IMDB, Rotten Tomatoes, Letterboxd, Trakt, MyAnimeList), award sashes (Oscar, Emmy, Golden Globe, Cannes, festival winners) and quality badges (4K, HDR, Dolby Vision) on Stremio posters. A free public preset-only tier is hosted by ElfHosted; private managed instances and self-hosting offer full per-poster customisation.",
+  "url": "https://posters.elfhosted.com",
+  "image": "https://docs.elfhosted.com/images/logo.svg",
+  "offers": [
+    {
+      "@type": "Offer",
+      "name": "Public — preset selection",
+      "price": "0",
+      "priceCurrency": "USD",
+      "description": "Anonymous access to six visual presets via /p/{preset}/{type}/{imdb_id}.jpg URLs."
+    },
+    {
+      "@type": "Offer",
+      "name": "Private managed instance",
+      "url": "https://store.elfhosted.com?utm_source=postersplus&utm_medium=jsonld&utm_campaign=offer_private",
+      "description": "Managed private deployment with full per-poster customisation (sliders, weights, sash priority)."
+    }
+  ],
+  "publisher": {
+    "@type": "Organization",
+    "name": "ElfHosted",
+    "url": "https://elfhosted.com",
+    "logo": "https://docs.elfhosted.com/images/logo.svg"
+  },
+  "isBasedOn": {
+    "@type": "SoftwareApplication",
+    "name": "PostersPlus",
+    "url": "https://github.com/UmbraProjects/PostersPlus"
+  },
+  "isSimilarTo": [
+    {"@type": "SoftwareApplication", "name": "BetterPosters", "url": "https://btttr.cc/"},
+    {"@type": "SoftwareApplication", "name": "Rating Poster Database (RPDB)", "url": "https://ratingposterdb.com/"},
+    {"@type": "SoftwareApplication", "name": "AIOratings", "url": "https://aioratings.com/"}
+  ]
+}
+</script>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="icon" type="image/png" href="/static/favicon.png">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
@@ -91,7 +168,28 @@
     letter-spacing: 0.25em;
     color: var(--gold);
     text-transform: uppercase;
+    /* h1 default browser styles reset (we promoted span→h1 for SEO
+       semantics; the visual rendering is unchanged). */
+    margin: 0;
+    line-height: 1;
+    display: inline-block;
   }
+  /* Make the no-JS summary look like a real page, not raw browser
+     defaults, when JavaScript is disabled. Browsers with JS enabled
+     don't render <noscript> contents at all so these rules are
+     effectively only consulted by the no-JS fallback path. */
+  .noscript-summary {
+    max-width: 760px;
+    margin: 40px auto;
+    padding: 0 24px;
+    font-family: var(--mono);
+    color: var(--silver);
+    line-height: 1.6;
+  }
+  .noscript-summary h1 { color: var(--gold); font-family: var(--serif); font-weight: 400; letter-spacing: 0.1em; }
+  .noscript-summary h2 { color: var(--gold-dim); font-family: var(--mono); font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; margin-top: 28px; }
+  .noscript-summary a { color: var(--gold); }
+  .noscript-summary strong { color: var(--gold); font-weight: 500; }
 
   .logo em {
     font-style: normal;
@@ -114,6 +212,51 @@
     color: var(--silver-dim);
     letter-spacing: 0.3em;
     text-transform: uppercase;
+  }
+
+  /* ElfHosted brand block — right-aligned in the header beside the
+     POSTERS+ logo. Matches the existing mono + caps + gold/silver-dim
+     aesthetic; SVG icon scales with the surrounding text. */
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    text-decoration: none;
+    color: inherit;
+  }
+  .header-right:hover .hosted-by-brand { color: var(--gold-bright); }
+  .header-right .hosted-by-logo {
+    display: block;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 auto;
+  }
+  .hosted-by-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 300;
+    color: var(--silver-dim);
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    line-height: 1.5;
+  }
+  .hosted-by-brand {
+    font-family: var(--serif);
+    font-size: 16px;
+    font-weight: 400;
+    color: var(--gold);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    transition: color 0.15s ease;
+  }
+  .hosted-by-tagline {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 300;
+    color: var(--silver-dim);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-top: 2px;
   }
 
   .status-bar {
@@ -900,6 +1043,105 @@
   .url-param-val { color: var(--silver); }
   .url-placeholder { color: var(--gold-dim); }
 
+  /* ── PRESET-ONLY LOCK ── horizontal banner between header + layout.
+     Text on top, three CTAs on a single row below — keeps the banner
+     short while letting all three calls-to-action breathe equally. */
+  .lock-banner {
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0 0 20px;
+    padding: 12px 18px;
+    background: var(--black);
+    border: 1px solid var(--gold-dim);
+    border-left: 3px solid var(--gold);
+  }
+  body.preset-only-mode .lock-banner { display: flex; }
+  .lock-banner-title {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 4px;
+  }
+  .lock-banner-body {
+    font-family: var(--mono);
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--silver-dim);
+  }
+  .lock-banner-cta-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .lock-banner-cta {
+    flex: 1 1 0;
+    min-width: 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 12px;
+    background: var(--black2);
+    border: 1px solid var(--border);
+    text-decoration: none;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .lock-banner-cta:hover {
+    background: #161616;
+    border-color: var(--gold-dim);
+  }
+  .lock-banner-cta.primary  { border-color: var(--gold-dim); }
+  .lock-banner-cta.primary:hover { border-color: var(--gold); }
+  .lock-banner-cta.tertiary { border-style: dashed; }
+  .lock-banner-cta-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+  .lock-banner-cta-sub {
+    font-family: var(--mono);
+    font-size: 8px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--silver-dim);
+  }
+
+  /* Anything below Core Config (i.e. the visual configuration sections)
+     is locked out when preset-only-mode is active. The user can still
+     SEE the sections but can't interact with them — a discoverability
+     win for tenants ("look what you get with a key") at zero cost. */
+  body.preset-only-mode .section ~ .section .section-body,
+  body.preset-only-mode .section ~ .section .section-header {
+    opacity: 0.35;
+    pointer-events: none;
+    user-select: none;
+  }
+  /* Inside Core Config: lock the per-user knobs (TMDB / MDBlist keys and
+     language) but keep search + preset dropdown editable. */
+  body.preset-only-mode #cfg-tmdb-key,
+  body.preset-only-mode #cfg-mdblist-key,
+  body.preset-only-mode #cfg-language {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+  body.preset-only-mode #cfg-tmdb-key + .field-hint,
+  body.preset-only-mode #cfg-mdblist-key + .field-hint {
+    opacity: 0.4;
+  }
+  /* Hide the URL import row entirely in lock mode — importing a /poster
+     URL would silently drop its params, and a preset URL doesn't need
+     the import box (the dropdown does the same job in one click). */
+  body.preset-only-mode #import-input,
+  body.preset-only-mode #import-row,
+  body.preset-only-mode .import-modal,
+  body.preset-only-mode .import-toggle { display: none !important; }
+
   /* ── BUTTONS ── */
   .btn-row {
     display: flex;
@@ -1167,17 +1409,133 @@
 </head>
 <body>
 
+<!-- LLM-readable summary. Crawlers and scrapers that don't execute the
+     configurator JS see only the <head>; this block gives them a
+     substantive, keyword-dense description of what Posters+ is, what it
+     does, and where the public/private/self-host paths live. Hidden via
+     CSS for regular visitors who get the rich JS UI below; .noscript-
+     summary[hidden] is honoured by browsers automatically when JS runs
+     so we don't actually need a manual hide, but we mark it inside a
+     <noscript> wrapper anyway for the cleanest semantic. -->
+<noscript>
+<main class="noscript-summary">
+  <h1>Posters+ — Stremio Poster Addon</h1>
+  <p>
+    <strong>Posters+</strong> is a Stremio poster addon that enriches
+    your Stremio catalogue with overlaid information: weighted ratings
+    from IMDB, Rotten Tomatoes, Letterboxd, Metacritic, Trakt and
+    MyAnimeList; award sashes for Oscar, Emmy, Golden Globe, Cannes
+    and other festival winners; and quality badges (4K, 1080p, HDR,
+    Dolby Vision, Remux) on Stremio movie and TV posters. It's an
+    alternative to <a href="https://btttr.cc/">BetterPosters</a>,
+    <a href="https://ratingposterdb.com/">RPDB</a> and
+    <a href="https://aioratings.com/">AIOratings</a>, designed as a
+    Cinemeta-replacement poster source for Stremio addons that consume
+    poster URLs (notably AIOMetadata).
+  </p>
+  <h2>How to use Posters+</h2>
+  <p>
+    The public hosted instance offers six fixed visual presets — pick
+    one and embed the resulting <code>/p/&lt;preset&gt;/&lt;type&gt;/&lt;imdb_id&gt;.jpg</code>
+    URL in any Stremio addon that takes a custom poster URL pattern.
+    Available presets: default, awards (sash-forward), minimalist,
+    letterboxd (Letterboxd-weighted), cinephile (prestige sash
+    priority), and quality (cached badges visible).
+  </p>
+  <h2>More options</h2>
+  <ul>
+    <li>
+      <strong><a href="https://store.elfhosted.com?utm_source=postersplus&amp;utm_medium=noscript&amp;utm_campaign=noscript_store">Get a private instance</a></strong>
+      — managed by ElfHosted, full per-poster customisation (sliders,
+      weights, sash priority).
+    </li>
+    <li>
+      <strong><a href="https://github.com/UmbraProjects/PostersPlus">Self-host</a></strong>
+      — upstream open-source project on GitHub.
+    </li>
+    <li>
+      Explore more
+      <strong><a href="https://stremio-addons-guide.elfhosted.com/?utm_source=postersplus&amp;utm_medium=noscript&amp;utm_campaign=noscript_addons_guide">best Stremio addons</a></strong>
+      hosted and reviewed by ElfHosted.
+    </li>
+  </ul>
+  <p>
+    Hosted by <a href="https://elfhosted.com?utm_source=postersplus&amp;utm_medium=noscript&amp;utm_campaign=noscript_brand">ElfHosted</a>
+    — [s]elf hosting without [s]uffering.
+  </p>
+</main>
+</noscript>
+
 <div class="shell">
 
   <header class="header">
     <div class="header-left">
       <div>
-        <span class="logo"><em>Posters</em>+</span>
+        <h1 class="logo"><em>Posters</em>+</h1>
         <span class="logo-sep">//</span>
         <span class="logo-sub">Web Configurator</span>
       </div>
     </div>
+
+    <!-- ElfHosted brand block. Logo is referenced by URL (rather than
+         inlined) because the canonical SVG ships ~39KB of Inkscape
+         metadata. Loading it from docs.elfhosted.com keeps the
+         configurator HTML small and lets the asset evolve without a
+         redeploy here. -->
+    <a class="header-right"
+       href="https://elfhosted.com?utm_source=postersplus&utm_medium=configurator&utm_campaign=header_brand"
+       target="_blank" rel="noopener noreferrer">
+      <img class="hosted-by-logo"
+           src="https://docs.elfhosted.com/images/logo.svg"
+           alt="ElfHosted"
+           width="36" height="36">
+      <div>
+        <div class="hosted-by-label">Hosted by</div>
+        <div class="hosted-by-brand">ElfHosted</div>
+        <div class="hosted-by-tagline">[s]elf hosting without [s]uffering</div>
+      </div>
+    </a>
   </header>
+
+  <!-- Public-tier informational banner (Phase 11 follow-up). Sits in the
+       full-width slot between the header and the two-column layout so
+       it doesn't burn vertical real estate inside the left panel. The
+       JS toggles body.preset-only-mode and the banner switches from
+       display:none to display:flex. Tenants who want custom rendering
+       run a private instance (separate URL); there's no unlock UI here. -->
+  <div class="lock-banner" id="lock-banner">
+    <div class="lock-banner-text">
+      <div class="lock-banner-title">Public access — preset selection only</div>
+      <div class="lock-banner-body">
+        To keep the public instance scalable, customization is limited
+        to the presets. For full control, run your own instance:
+      </div>
+    </div>
+    <div class="lock-banner-cta-row">
+      <a class="lock-banner-cta primary"
+         href="https://store.elfhosted.com?utm_source=postersplus&utm_medium=configurator&utm_campaign=lock_banner_store"
+         target="_blank" rel="noopener noreferrer">
+        <span class="lock-banner-cta-label">Get a private instance</span>
+        <span class="lock-banner-cta-sub">$1 trial</span>
+      </a>
+      <a class="lock-banner-cta"
+         href="https://github.com/UmbraProjects/PostersPlus"
+         target="_blank" rel="noopener noreferrer">
+        <span class="lock-banner-cta-label">Self-host</span>
+        <span class="lock-banner-cta-sub">github.com — upstream source</span>
+      </a>
+      <!-- Stremio addons guide CTA. Anchor text deliberately uses the
+           exact "best Stremio addons" phrase for SEO weight on the
+           target page. UTM-tagged so the guide can attribute referrals
+           back to which PostersPlus surface drove the click. -->
+      <a class="lock-banner-cta tertiary"
+         href="https://stremio-addons-guide.elfhosted.com/?utm_source=postersplus&utm_medium=configurator&utm_campaign=lock_banner_addons_guide"
+         target="_blank" rel="noopener noreferrer">
+        <span class="lock-banner-cta-label">Best Stremio addons</span>
+        <span class="lock-banner-cta-sub">curated, opinionated guide</span>
+      </a>
+    </div>
+  </div>
 
   <div class="main-layout">
 
@@ -1201,6 +1559,27 @@
             <span class="section-chevron">▼</span>
           </div>
           <div class="section-body">
+
+            <!-- Preset mode (Phase 11). When a preset is selected the
+                 emitted URL switches to /p/{preset}/{type}/{imdb_id}.jpg —
+                 anonymous, CDN-cacheable, server-side keys only. Custom
+                 (the default) uses the full /poster URL with every field
+                 below as a query param. -->
+            <div class="field">
+              <label class="field-label">Preset Mode</label>
+              <select id="cfg-preset" oninput="onPresetChange()">
+                <option value="" selected>Custom (use settings below)</option>
+                <option value="default">default — standard look</option>
+                <option value="awards">awards — sash-forward, no score</option>
+                <option value="minimalist">minimalist — small genre, no bar</option>
+                <option value="letterboxd">letterboxd — numeric score, no sash</option>
+                <option value="cinephile">cinephile — prestige sash priority</option>
+                <option value="quality">quality — score + cached badges</option>
+              </select>
+              <div class="field-hint" id="preset-hint" style="display:none;color:var(--gold-dim);font-size:9px;margin-top:6px;line-height:1.4;">
+                Preset mode emits the short <code>/p/&hellip;</code> URL. Server-side TMDB key is required; the configuration sections below are bypassed.
+              </div>
+            </div>
 
             <div class="field">
               <label class="field-label">Content Search</label>
@@ -1586,6 +1965,10 @@ const qs = new URLSearchParams(window.location.search);
 (function deriveAuthFromUrl() {
   const domain = window.location.origin;
   document.getElementById('cfg-domain').value = domain;
+  // cfg-access-key is still populated from URL/localStorage for legacy
+  // tenant tooling that points at a private instance with ?access_key=…
+  // in the URL. On a public-tier deployment the field stays empty and
+  // the preset-only lock banner handles the UX.
   const ak = qs.get('access_key') || localStorage.getItem('postersplus_access_key') || '';
   document.getElementById('cfg-access-key').value = ak;
   if (ak) localStorage.setItem('postersplus_access_key', ak);
@@ -1624,7 +2007,7 @@ const SASH_SLOTS = [
 let sashOrder    = SASH_SLOTS.map(s => s.id);
 let sashDisabled = new Set();   // IDs explicitly disabled via ✕ button
 let mediaType = 'movie', resolvedImdbId = '', resolvedTmdbId = '';
-let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false };
+let serverCaps = { tmdb_key_set: false, mdblist_key_set: false, aiostreams_configured: false, preset_enabled: false, presets: [], access_key_valid: true };
 let searchDebounce = null, previewDebounce = null, previewLoading = false, imdbResolvePending = false;
 
 const previewPanel = document.querySelector('.preview-panel');
@@ -1701,13 +2084,24 @@ function updateWeightRange(el, outId) {
 
 async function fetchServerCaps() {
   try {
+    // Pass cfg-access-key (populated from URL/localStorage at boot) so
+    // the legacy ?access_key=… escape hatch can unlock the configurator
+    // on a public-tier instance for someone routing a tenant client at it.
     const ak = vEl('cfg-access-key');
     const url = ak ? `/server-caps?access_key=${encodeURIComponent(ak)}` : '/server-caps';
     const resp = await fetch(url);
     if (!resp.ok) return;
     serverCaps = await resp.json();
-    updateKeyBadges();
-  } catch(e) {}
+  } catch(e) {
+    console.warn('fetchServerCaps failed', e);
+    return;
+  }
+  // Apply the lock state first — independent of badge/hint DOM elements
+  // that may or may not be present in this fork's configurator HTML. A
+  // null-deref inside updateKeyBadges() must not strand the lock in the
+  // unlocked state.
+  try { applyLockMode(); }   catch(e) { console.warn('applyLockMode failed', e); }
+  try { updateKeyBadges(); } catch(e) { console.warn('updateKeyBadges failed', e); }
 }
 
 function updateKeyBadges() {
@@ -1718,27 +2112,84 @@ function updateKeyBadges() {
   const tmdbInput = document.getElementById('cfg-tmdb-key');
   const mdbInput  = document.getElementById('cfg-mdblist-key');
 
+  // These badge/hint elements are upstream-historical and not guaranteed
+  // to exist in every configurator variant — guard each access so a
+  // missing badge node can't strand the rest of the function (notably
+  // the preset-only lock flow downstream).
   if (serverCaps.tmdb_key_set) {
-    tmdbBadge.style.display = ''; tmdbBadge.textContent = 'Server Key Set'; tmdbBadge.className = 'server-key-badge';
-    tmdbHint.style.display = ''; tmdbHint.textContent = 'Server-side TMDB key configured. Your key (if entered) takes priority.';
-    tmdbInput.placeholder = 'Optional — server key used if blank';
+    if (tmdbBadge) { tmdbBadge.style.display = ''; tmdbBadge.textContent = 'Server Key Set'; tmdbBadge.className = 'server-key-badge'; }
+    if (tmdbHint)  { tmdbHint.style.display = '';  tmdbHint.textContent = 'Server-side TMDB key configured. Your key (if entered) takes priority.'; }
+    if (tmdbInput) tmdbInput.placeholder = 'Optional — server key used if blank';
   } else {
-    tmdbBadge.style.display = ''; tmdbBadge.textContent = 'No Server Key'; tmdbBadge.className = 'server-key-badge missing';
-    tmdbHint.style.display = 'none';
-    tmdbInput.placeholder = 'Required — no server key configured';
+    if (tmdbBadge) { tmdbBadge.style.display = ''; tmdbBadge.textContent = 'No Server Key'; tmdbBadge.className = 'server-key-badge missing'; }
+    if (tmdbHint)  tmdbHint.style.display = 'none';
+    if (tmdbInput) tmdbInput.placeholder = 'Required — no server key configured';
   }
 
   if (serverCaps.mdblist_key_set) {
-    mdbHint.style.display = ''; mdbHint.textContent = 'Server-side MDblist key configured. Your key (if entered) takes priority.';
-    mdbInput.placeholder = 'Optional — server key used if blank';
+    if (mdbHint)  { mdbHint.style.display = ''; mdbHint.textContent = 'Server-side MDblist key configured. Your key (if entered) takes priority.'; }
+    if (mdbInput) mdbInput.placeholder = 'Optional — server key used if blank';
   } else {
-    mdbHint.style.display = ''; mdbHint.textContent = 'Cached titles work without a key. Uncached titles require a key.';
-    mdbInput.placeholder = 'Required for uncached titles';
+    if (mdbHint)  { mdbHint.style.display = ''; mdbHint.textContent = 'Cached titles work without a key. Uncached titles require a key.'; }
+    if (mdbInput) mdbInput.placeholder = 'Required for uncached titles';
   }
 
   const aiosHint = document.getElementById('aiostreams-hint');
   if (aiosHint) {
     aiosHint.style.display = serverCaps.aiostreams_configured ? 'none' : '';
+  }
+
+  // Phase 11: hide the preset selector entirely on instances that haven't
+  // opted into the public preset endpoint (PRESET_ENABLED unset/false).
+  // The dropdown's options would emit /p/... URLs that 404 against this
+  // backend, so it's better to remove the temptation than to render dead
+  // links. If a preset is already selected (e.g. via URL import) clear it
+  // so the URL output reverts to /poster form.
+  const presetField = document.getElementById('cfg-preset');
+  if (presetField) {
+    const fieldWrap = presetField.closest('.field');
+    if (serverCaps.preset_enabled) {
+      if (fieldWrap) fieldWrap.style.display = '';
+    } else {
+      if (fieldWrap) fieldWrap.style.display = 'none';
+      if (presetField.value) {
+        presetField.value = '';
+        refreshPresetUiState();
+        build();
+      }
+    }
+  }
+
+  // Note: applyLockMode() is called from fetchServerCaps() directly so
+  // a missing badge/hint element above can't keep the lock from firing.
+}
+
+function applyLockMode() {
+  // The lock is the public-tier marker: on a deployment with
+  // preset_enabled=true the configurator drops into preset-only mode.
+  // Tenants who want custom rendering run a private instance, so the
+  // banner shows CTAs (store + self-host) instead of an unlock input.
+  //
+  // Legacy escape hatch: a URL like ?access_key=<valid-key> still
+  // unlocks the UI on a preset-enabled instance — the access_key flows
+  // through cfg-access-key into the /server-caps validation and
+  // access_key_valid clears the lock. Useful if someone deliberately
+  // routes a tenant client at the public host; not surfaced in the UI.
+  const lock = !!serverCaps.preset_enabled && !serverCaps.access_key_valid;
+  document.body.classList.toggle('preset-only-mode', lock);
+
+  // Hide the "Custom" option in the preset dropdown so the locked UI
+  // can only emit /p/... URLs; force "default" as the active preset
+  // if nothing else is selected yet.
+  const presetField = document.getElementById('cfg-preset');
+  if (presetField) {
+    const customOpt = presetField.querySelector('option[value=""]');
+    if (customOpt) customOpt.hidden = lock;
+    if (lock && (!presetField.value || presetField.value === '')) {
+      presetField.value = 'default';
+      refreshPresetUiState();
+      build();
+    }
   }
 }
 
@@ -2262,6 +2713,18 @@ function decodePlaceholders(url) {
   return url.replace(/%7B/g, '{').replace(/%7D/g, '}');
 }
 
+function refreshPresetUiState() {
+  const preset = vEl('cfg-preset');
+  const hint = document.getElementById('preset-hint');
+  if (hint) hint.style.display = preset ? 'block' : 'none';
+  document.body.classList.toggle('preset-active', !!preset);
+}
+
+function onPresetChange() {
+  refreshPresetUiState();
+  build();
+}
+
 function buildBaseParams({ usePlaceholders = false } = {}) {
   const domain   = vEl('cfg-domain').replace(/\/$/, '') || 'https://your-instance.com';
   const logoLanguage = vEl('cfg-language') || 'en';
@@ -2269,6 +2732,19 @@ function buildBaseParams({ usePlaceholders = false } = {}) {
   const tmdbId   = usePlaceholders ? '{tmdb_id}'  : (resolvedTmdbId  || '{tmdb_id}');
   const accKey   = vEl('cfg-access-key');
   const type     = usePlaceholders ? '{type}'     : mediaType;
+
+  // Phase 11: preset mode short-circuits the full param URL. The /p
+  // endpoint takes only (preset, type, imdb_id) and pulls visual params
+  // server-side from presets.py, so the configurator's other fields are
+  // intentionally not included in the URL when a preset is selected.
+  const preset = vEl('cfg-preset');
+  if (preset) {
+    // Type in the path is movie|tv (no "series" variant on the preset
+    // endpoint); fold series→tv to match the route's validator.
+    const presetType = (type === 'series') ? 'tv' : type;
+    const presetUrl = `${domain}/p/${preset}/${presetType}/${imdbId}.jpg`;
+    return usePlaceholders ? decodePlaceholders(presetUrl) : presetUrl;
+  }
   const userTmdbKey    = vEl('cfg-tmdb-key');
   const userMdblistKey = vEl('cfg-mdblist-key');
   const params = new URLSearchParams();
@@ -2340,6 +2816,12 @@ function resetDefaults() {
   sashDisabled = new Set();
   localStorage.removeItem('postersplus_sash_order');
   buildSashList();
+  refreshPresetUiState();
+  // Re-apply preset-only lock if active. resetDefaults() flipped
+  // cfg-preset back to the default-selected Custom option ("") which
+  // would otherwise emit a /poster URL — locked anonymous users
+  // must stay on a preset.
+  applyLockMode();
   build();
   collapsePreview();
   setLog('preview-log', 'Reset to defaults. API keys preserved.', 'info');
@@ -2348,7 +2830,9 @@ function resetDefaults() {
 function queuePreviewReload() {
   clearTimeout(previewDebounce);
   previewDebounce = setTimeout(() => {
-    if (resolvedImdbId && resolvedTmdbId) loadPreview();
+    // Preset mode needs only imdb_id; custom mode still needs both.
+    const presetMode = !!vEl('cfg-preset');
+    if (presetMode ? resolvedImdbId : (resolvedImdbId && resolvedTmdbId)) loadPreview();
   }, 350);
 }
 
@@ -2361,8 +2845,17 @@ function setLog(id, msg, cls='') {
 async function loadPreview() {
   if (previewLoading) { clearTimeout(previewDebounce); return; }
   if (imdbResolvePending) return;
-  if (!resolvedImdbId || !resolvedTmdbId) { setLog('preview-log', 'Search and select a title first', 'err'); return; }
-  if (!vEl('cfg-tmdb-key') && !serverCaps.tmdb_key_set) { setLog('preview-log', 'This instance has no server side TMDB key. You must provide your own or ask the operator to add one.', 'err'); return; }
+  // Phase 11: preset mode only needs an IMDb id (the server resolves to
+  // TMDB id from there); custom mode still requires both. Likewise the
+  // user-side TMDB key requirement is for /poster — /p uses the operator's
+  // server key exclusively.
+  const presetMode = !!vEl('cfg-preset');
+  if (presetMode) {
+    if (!resolvedImdbId) { setLog('preview-log', 'Search and select a title first', 'err'); return; }
+  } else {
+    if (!resolvedImdbId || !resolvedTmdbId) { setLog('preview-log', 'Search and select a title first', 'err'); return; }
+    if (!vEl('cfg-tmdb-key') && !serverCaps.tmdb_key_set) { setLog('preview-log', 'This instance has no server side TMDB key. You must provide your own or ask the operator to add one.', 'err'); return; }
+  }
   previewLoading = true;
   document.getElementById('preview-status').textContent = 'LOADING';
   const frame = document.getElementById('preview-frame');
@@ -2371,7 +2864,9 @@ async function loadPreview() {
     frame.innerHTML = `<div class="preview-empty"><div class="preview-spinner"></div>Fetching poster…</div>`;
   }
   setLog('preview-log', 'fetching poster…', 'info');
-  const previewUrl = buildPreviewUrl() + '&_ts=' + Date.now();
+  // Cache-bust without breaking path-only preset URLs (no existing `?`).
+  const baseUrl = buildPreviewUrl();
+  const previewUrl = baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_ts=' + Date.now();
   const existingImg = frame.querySelector('.preview-poster');
   if (existingImg) {
     existingImg.style.opacity = '0.3';
@@ -2462,13 +2957,35 @@ function importUrl(urlStr) {
     return false;
   }
 
+  // Phase 11: also accept /p/{preset}/{type}/{imdb_id}.jpg preset URLs.
+  // Path components are positional, no query params expected.
+  const presetMatch = parsed.pathname.match(/^\/p\/([^\/]+)\/(movie|tv)\/(tt\d+)\.jpg\/?$/);
+  if (presetMatch) {
+    const [, preset, presetType, imdbId] = presetMatch;
+    document.getElementById('cfg-domain').value = parsed.origin;
+    resolvedImdbId = imdbId;
+    mediaType      = presetType;
+    _setEl('cfg-preset', preset);
+    refreshPresetUiState();
+    build();
+    setLog('preview-log', `Imported preset URL: ${preset} / ${presetType} / ${imdbId}.`, 'ok');
+    return true;
+  }
+
   // Only accept /poster paths
   if (!parsed.pathname.endsWith('/poster') && !parsed.pathname.endsWith('/poster/')) {
-    setLog('preview-log', 'Import failed — URL does not look like a poster endpoint (/poster).', 'err');
+    setLog('preview-log', 'Import failed — URL does not look like a poster endpoint (/poster or /p/…).', 'err');
     return false;
   }
 
   const p = parsed.searchParams;
+
+  // Phase 11: a /poster URL is by definition custom mode. Clear any
+  // previously-selected preset so the rebuilt output URL stays in /poster
+  // form instead of re-emitting /p/{preset}/... with the imported values
+  // silently dropped.
+  _setEl('cfg-preset', '');
+  refreshPresetUiState();
 
   // ── Domain & auth ──────────────────────────────────────────────────────
   document.getElementById('cfg-domain').value = parsed.origin;

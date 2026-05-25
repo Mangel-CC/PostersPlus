@@ -96,6 +96,26 @@ RATE_LIMIT_RPS          = int(os.environ.get("RATE_LIMIT_RPS", "0"))
 # edge. Set to 0 to disable (e.g. when running without a CDN).
 CDN_CACHE_TTL         = int(os.environ.get("CDN_CACHE_TTL", "0"))
 
+# Phase 11: public preset endpoint (/p/{preset}/{type}/{imdb_id}.jpg).
+# When PRESET_ENABLED is true, anonymous requests can hit a small set of
+# named visual presets without supplying access_key / tmdb_key / mdblist_key.
+# The operator's server-configured keys are used; PRESET_CDN_CACHE_TTL
+# controls the Cache-Control max-age on preset responses (defaults to 1
+# day — much longer than CDN_CACHE_TTL since presets are deterministic
+# per (preset, type, imdb_id) and don't change with query params).
+PRESET_ENABLED        = os.environ.get("PRESET_ENABLED", "").strip().lower() in ("1", "true", "yes")
+PRESET_CDN_CACHE_TTL  = int(os.environ.get("PRESET_CDN_CACHE_TTL", "86400"))
+
+# Floor on anonymous /search and /resolve-imdb requests. These endpoints
+# became anonymous in the Phase 11 follow-up so the public preset flow
+# can use the title picker. RATE_LIMIT_RPS (default 0 = disabled) only
+# gates /poster + /p; without this independent floor, an operator who
+# never set RATE_LIMIT_RPS would leave the TMDB proxy endpoints
+# completely unthrottled and let any visitor burn the server TMDB quota.
+# Set to 0 to disable (e.g. for fully private deployments where the
+# configurator and proxies are already on an authenticated network).
+ANONYMOUS_TMDB_RPS    = int(os.environ.get("ANONYMOUS_TMDB_RPS", "5"))
+
 # Feature Defaults 
 
 SHOW_RATING_DISPLAY_MODE = 1
