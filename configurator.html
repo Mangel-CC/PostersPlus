@@ -2761,6 +2761,11 @@ function refreshPresetUiState() {
 function onPresetChange() {
   refreshPresetUiState();
   build();
+  // Every other control pairs build() with queuePreviewReload() so the
+  // right-panel preview re-fetches when the emitted URL changes; the
+  // preset dropdown was missing the second call, so the URL text
+  // updated but the preview stayed pinned to the previous render.
+  queuePreviewReload();
 }
 
 function buildBaseParams({ usePlaceholders = false } = {}) {
