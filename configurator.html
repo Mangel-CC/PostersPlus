@@ -1111,6 +1111,22 @@
     text-transform: uppercase;
     color: var(--silver-dim);
   }
+  .lock-banner-sponsor {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    color: var(--text-muted);
+  }
+  .lock-banner-sponsor a {
+    color: var(--silver-dim);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .lock-banner-sponsor a:hover { color: var(--gold); }
 
   /* Anything below Core Config (i.e. the visual configuration sections)
      is locked out when preset-only-mode is active. The user can still
@@ -1454,6 +1470,7 @@
     <li>
       <strong><a href="https://github.com/UmbraProjects/PostersPlus">Self-host</a></strong>
       — upstream open-source project on GitHub.
+      <a href="https://ko-fi.com/umbraprojects">Sponsor the developer</a>.
     </li>
     <li>
       Explore more
@@ -1536,6 +1553,14 @@
         <span class="lock-banner-cta-label">Best Stremio addons</span>
         <span class="lock-banner-cta-sub">curated, opinionated guide</span>
       </a>
+    </div>
+    <!-- Upstream developer credit. PostersPlus is open-source work by
+         UmbraProjects; the fork inherits it. Ko-fi link is direct (no
+         UTM — not our property). -->
+    <div class="lock-banner-sponsor">
+      Posters+ is open-source —
+      <a href="https://ko-fi.com/umbraprojects"
+         target="_blank" rel="noopener noreferrer">sponsor the upstream developer &rarr;</a>
     </div>
   </div>
 
