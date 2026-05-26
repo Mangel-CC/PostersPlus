@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0](https://github.com/elfhosted/PostersPlus/compare/v0.6.0...v1.0.0) (2026-05-26)
+
+
+### Features
+
+* build-version footer + align to upstream v1.0.0 ([41a85cf](https://github.com/elfhosted/PostersPlus/commit/41a85cf8256e9bfe7e13abb65334fe87feb7adc4))
+* build-version footer + align to upstream v1.0.0 ([c40cd5c](https://github.com/elfhosted/PostersPlus/commit/c40cd5ccb39d1a759acafb9a92f1539576e47999))
+
 ## [0.6.0](https://github.com/elfhosted/PostersPlus/compare/v0.5.2...v0.6.0) (2026-05-26)
 
 
