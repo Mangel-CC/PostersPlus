@@ -31,10 +31,20 @@ from __future__ import annotations
 
 
 # Common base applied to every preset. Public-tier defaults:
-#   * Badges from cache only (no AIOStreams fan-out per anonymous hit).
-#   * Sash on (the curated discovery overrides are the moat).
+#   * Mode 4 quality indicator (cheap vertical tier-bar pill — much
+#     lighter render cost than mode 1 age-rating numeral or mode 2
+#     full badge row). Cached badges only; never AIOStreams fan-out on
+#     anonymous hits.
+#   * Sash on by default (the curated discovery-override dataset is
+#     the moat — every public hit gets a chance to show a festival or
+#     director sash).
+#
+# Presets pick a small number of axes that meaningfully differ visually
+# while keeping render cost low. The endpoint hashes raw_params into a
+# short params_hash, so fewer distinct presets = fewer composite cache
+# entries per (imdb_id, type) = better cache hit rate at the edge.
 _PUBLIC_BASE: dict[str, str] = {
-    "badge_display_mode": "1",
+    "badge_display_mode": "4",
     "show_award_sash":    "true",
 }
 
@@ -48,47 +58,59 @@ def _preset(extra: dict[str, str]) -> dict[str, str]:
 # preset breaks any external link that already uses it, so rename only
 # with a deprecation alias.
 PRESETS: dict[str, dict[str, str]] = {
-    # Default rendering — same look the configurator emits by default.
-    # The natural choice for embedding posters where you don't have an
-    # opinion about visual tone.
+    # Default rendering. Standard look: weighted score bar + genre/year
+    # caption + a mode-4 tier accent bar in the corner. The natural
+    # choice when no opinion about visual tone is needed.
     "default": _preset({}),
 
-    # Sash-forward. Hides the numeric score so the award/discovery sash
-    # is the dominant element. Useful for catalogues skewed toward
-    # prestige picks (festival winners, AFI lists, "best of" sets).
+    # Sash-forward. The award/discovery sash is the only visible
+    # overlay: score hidden, no quality bar. Muted sash sits *in* the
+    # art rather than above it for a less-shouty prestige look.
     "awards": _preset({
         "rating_display_mode": "0",
+        "badge_display_mode":  "0",
+        "muted":               "true",
     }),
 
-    # Minimalist mode — small genre text bottom-right, no score bar.
-    # Pairs well with grid-heavy UIs that want the poster art to lead.
+    # Minimalist mode — small genre tag bottom-right, no sash, no
+    # quality bar, no logo overlay (textless). Lets the poster art
+    # lead; cheapest preset to render of the set.
     "minimalist": _preset({
         "rating_display_mode": "3",
+        "badge_display_mode":  "0",
+        "show_award_sash":     "false",
+        "textless":            "true",
     }),
 
-    # Letterboxd-flavoured: numeric score with the genre tag, no sash.
-    # Mirrors the audience-score-only aesthetic of letterboxd embeds.
+    # Letterboxd-flavoured: numeric score with genre tag, no sash, no
+    # quality bar. Mirrors the audience-score-only aesthetic of
+    # letterboxd embeds.
     "letterboxd": _preset({
         "rating_display_mode":   "2",
+        "badge_display_mode":    "0",
         "show_award_sash":       "false",
         "movie_weights":         "letterboxd:1.0",
         "tv_weights":            "trakt:0.7,tomatoes:0.3",
     }),
 
-    # Cinephile: prestige-leaning sash priority. Surfaces festival
-    # circuit and director/cast badges before commercial-success ones
-    # like "trending" or "metacritic-must-see".
+    # Cinephile: prestige-leaning sash priority (festival circuit and
+    # director/cast slots before commercial-success ones), muted sash,
+    # and the metal score palette (grey/bronze/silver/gold) matching
+    # the tier-bar colours for a unified subdued look.
     "cinephile": _preset({
         "rating_display_mode": "1",
+        "badge_display_mode":  "4",
         "sash_priority":       "wins,festival,gg_wins,director,cast,studio,pic_noms,gg_noms",
+        "muted":               "true",
+        "score_color_mode":    "2",
     }),
 
-    # Quality-forward: keeps the score visible AND the quality badges
-    # corner-stacked when AIOStreams data is in cache. Good for users
-    # who want stream-availability cues alongside the poster.
+    # Quality-forward: keeps the score visible AND a mode-4 tier bar.
+    # Cheaper than the old badge-row mode and still signals stream
+    # availability when AIOStreams data is cached.
     "quality": _preset({
         "rating_display_mode": "1",
-        "badge_display_mode":  "1",
+        "badge_display_mode":  "4",
     }),
 }
 

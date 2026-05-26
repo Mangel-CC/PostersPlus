@@ -81,9 +81,8 @@ async def sync_digital_releases(client: httpx.AsyncClient) -> int:
 
         for post in posts:
             posted_at = int(post.get("created_utc", 0))
-            match = _IMDB_RE.search(post.get("selftext", ""))
-            if match:
-                entries.append((match.group(), posted_at))
+            for imdb_id in _IMDB_RE.findall(post.get("selftext", "")):
+                entries.append((imdb_id, posted_at))
 
         if len(posts) < _LIMIT:
             break   # last page — no need to paginate further

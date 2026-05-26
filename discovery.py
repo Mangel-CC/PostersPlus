@@ -127,7 +127,6 @@ NOTABLE_DIRECTORS: dict[str, str] = {
     "David Cronenberg":    "D. Cronenberg",
     "Michael Mann":        "Michael Mann",
     "Francis Ford Coppola":"F.F Coppola",
-    "Stanley Kubrick":     "S. Kubrick",
     "Jane Campion":        "J. Campion",
     "Terrence Malick":     "T. Malick",
     "Mike Flanagan":       "M. Flanagan",
@@ -252,7 +251,7 @@ LANGUAGE_LABELS: dict[str, str] = {
     "ro": "Romanian",
     "hu": "Hungarian",
     "cs": "Czech",
-    "he": "Israeli",
+    "he": "Hebrew",
     "el": "Greek",
 }
 
@@ -275,7 +274,6 @@ _SASH_TYPES: dict[str, str] = {
     "metacritic":      "nom",       # silver — critical award, fits with noms not production
     "true_story":      "info",      # teal
     "structural":      "info",      # teal
-    "emmy_noms":       "nom",       # silver
 }
 
 NEW_RELEASE_DAYS = 14

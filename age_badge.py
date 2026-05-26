@@ -54,19 +54,19 @@ _TIERS = {
     "grey": {
         "glow":      (100, 100, 104,  28),   # barely any halo — looks flat/unlit
         "shadow":    (12,  12,  14, 190),
-        "primary":   (130, 130, 136, 175),   # noticeably darker and more faded than silver
+        "primary":   (130, 130, 136, 75),   # noticeably darker and more faded than silver
         "highlight": (160, 160, 166,  18),   # near-invisible — no metallic sheen
     },
     "bronze": {
         "glow":      (200, 110,  40,  70),
         "shadow":    (45,  18,   0, 210),
-        "primary":   (200, 110,  45, 225),
+        "primary":   (200, 110,  45, 125),
         "highlight": (255, 200, 150, 45),
     },
     "silver": {
         "glow":      (195, 205, 228,  65),
         "shadow":    (30,  34,  50, 215),
-        "primary":   (218, 224, 240, 200),
+        "primary":   (218, 224, 240, 125),
         "highlight": (255, 255, 255, 55),
     },
     "gold": {
@@ -150,7 +150,7 @@ def draw_quality_age_badge(
       4. Highlight pass         — near-white overlay at low opacity, shifted
                                   slightly up-left, for an inner-light illusion
     """
-    if not age_rating:
+    if age_rating is None:
         return
 
     W, H   = image.size
@@ -210,4 +210,89 @@ def draw_quality_age_badge(
     )
     # Tiny blur so the highlight blends rather than creating a visible echo
     hl_layer = hl_layer.filter(ImageFilter.GaussianBlur(max(1, font_size // 30)))
+    image.alpha_composite(hl_layer)
+
+
+# ---------------------------------------------------------------------------
+# Mode 4 — Accent bar
+# ---------------------------------------------------------------------------
+# A small vertical rounded pill in the top-left corner whose colour reflects
+# the quality tier.  No text — purely decorative / at-a-glance indicator.
+#
+# Visual layers (back → front):
+#   1. Wide ambient glow  — soft blur matching the numeral badge style
+#   2. Bar body           — solid fill at the primary tier colour
+#   3. Highlight pass     — near-white overlay at low opacity across the left
+#                           half, giving a subtle sheen without looking fake
+
+def draw_tier_bar(
+    image: Image.Image,
+    quality_tokens: Sequence[str],
+    *,
+    anchor_x_ratio: float = 0.040,
+    anchor_y_ratio: float = 0.030,
+    bar_w_ratio: float = 0.008,   # bar width as fraction of poster width (narrow)
+    bar_h_ratio: float = 0.028,   # bar height as fraction of poster height (tall)
+    min_bar_w: int = 3,
+    min_bar_h: int = 20,
+    bar_height: int | None = None,  # explicit pixel height; overrides bar_h_ratio when set
+) -> None:
+    """
+    Render a small vertical rounded accent pill in the top-left corner whose
+    fill colour reflects the quality tier derived from *quality_tokens*.
+    When *bar_height* is provided it is used directly as the bar's pixel height,
+    allowing the configurator's Height control to apply to mode 4.
+    """
+    pts    = _score_points(quality_tokens)
+    colors = _tier(pts)
+
+    W, H = image.size
+    x = int(W * anchor_x_ratio)
+    y = int(H * anchor_y_ratio)
+    bw = max(min_bar_w, int(W * bar_w_ratio))
+    bh = bar_height if bar_height is not None else max(min_bar_h, int(H * bar_h_ratio))
+    radius = bw // 2  # pill-shaped: radius driven by the narrow dimension
+
+    # ── 1. Ambient glow ───────────────────────────────────────────────────
+    pad        = bw * 5
+    glow_size  = (bw + pad * 2, bh + pad * 2)
+    glow_layer = Image.new("RGBA", glow_size, (0, 0, 0, 0))
+    ImageDraw.Draw(glow_layer).rounded_rectangle(
+        [pad, pad, pad + bw, pad + bh],
+        radius=radius,
+        fill=(*colors["glow"][:3], min(255, colors["glow"][3] + 20)),
+    )
+    glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(bw * 1.8))
+    # Clamp the destination to non-negative coords — small badge anchors
+    # (the configurator allows down to 0.01) put `x - pad` / `y - pad`
+    # off the top/left edge of the canvas, which Pillow rejects with a
+    # ValueError. When that happens, crop the glow layer by the
+    # overhanging amount so the visible portion still composites.
+    gx, gy = x - pad, y - pad
+    crop_l = max(0, -gx)
+    crop_t = max(0, -gy)
+    if crop_l or crop_t:
+        glow_layer = glow_layer.crop((crop_l, crop_t, glow_layer.width, glow_layer.height))
+        gx += crop_l
+        gy += crop_t
+    image.alpha_composite(glow_layer, dest=(gx, gy))
+
+    # ── 2. Bar body ───────────────────────────────────────────────────────
+    bar_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    ImageDraw.Draw(bar_layer).rounded_rectangle(
+        [x, y, x + bw, y + bh],
+        radius=radius,
+        fill=colors["primary"],
+    )
+    image.alpha_composite(bar_layer)
+
+    # ── 3. Highlight sheen ────────────────────────────────────────────────
+    # Fill only the left half of the bar to simulate light catching the edge.
+    hl_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    hl_w = max(1, bw // 2)
+    ImageDraw.Draw(hl_layer).rounded_rectangle(
+        [x, y, x + hl_w, y + bh],
+        radius=radius,
+        fill=(*colors["highlight"][:3], min(255, colors["highlight"][3] + 20)),
+    )
     image.alpha_composite(hl_layer)
