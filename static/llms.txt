@@ -45,6 +45,7 @@ Posters+ aggregates from MDBList (IMDB, Rotten Tomatoes, Letterboxd, Metacritic,
 
 - Upstream open-source project: <https://github.com/UmbraProjects/PostersPlus>
 - ElfHosted fork (hosting-mode resilience — Postgres, Redis, S3, multi-process metrics, per-tenant rate limiting, preset endpoint): <https://github.com/elfhosted/PostersPlus>
+- Sponsor the upstream developer: <https://ko-fi.com/umbraprojects>
 
 ## License
 
