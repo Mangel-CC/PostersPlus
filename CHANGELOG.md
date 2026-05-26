@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/elfhosted/PostersPlus/compare/v0.4.0...v0.5.0) (2026-05-26)
+
+
+### Features
+
+* selective port of upstream v1.0.0 — backdrop fallback, MDBlist semaphore, range clamps, log redaction ([dc224e5](https://github.com/elfhosted/PostersPlus/commit/dc224e5a7c0a750b18e877f3c9e9fa2554ae9523))
+
 ## [0.4.0](https://github.com/elfhosted/PostersPlus/compare/v0.3.1...v0.4.0) (2026-05-26)
 
 
