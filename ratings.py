@@ -178,15 +178,12 @@ def draw_score_bar(
     y1, y0  = H - bottom_margin, H - bottom_margin - bar_h
     bar_w   = x1 - x0
     fill_w  = int(bar_w * (score / 100))
-    if fill_w <= 0:
-        return
     radius = min(bar_h // 2, 8)
-    _color_fn = {1: _score_color_alt, 2: _score_color_metal}.get(color_mode, _score_color)
-    left_color, right_color = _color_fn(score)
-    left_color  = _soften(left_color,  0.90)
-    right_color = _soften(right_color, 0.90)
 
     # ── Track (background pill) ───────────────────────────────────────────
+    # Drawn BEFORE the fill_w<=0 early-return so score=0 still shows an
+    # empty track rather than no bar at all (which would otherwise be
+    # visually indistinguishable from "no rating available").
     track = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ImageDraw.Draw(track).rounded_rectangle(
         [(x0, y0), (x1 - 1, y1 - 1)],
@@ -194,6 +191,13 @@ def draw_score_bar(
         fill=(255, 255, 255, 45),
     )
     image.alpha_composite(track)
+
+    if fill_w <= 0:
+        return
+    _color_fn = {1: _score_color_alt, 2: _score_color_metal}.get(color_mode, _score_color)
+    left_color, right_color = _color_fn(score)
+    left_color  = _soften(left_color,  0.90)
+    right_color = _soften(right_color, 0.90)
 
     # ── Filled segment — numpy gradient, no Python pixel loop ────────────
     # Build an (bar_h × fill_w) RGB array by interpolating left→right colour.

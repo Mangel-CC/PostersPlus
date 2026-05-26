@@ -86,13 +86,18 @@ async def fetch_poster_metadata(
     tmdb_id: str,
     tmdb_key: str,
     media_type: str = "movie",
-) -> tuple[list[int], bool, list[dict], str | None, str, str, dict]:
+) -> tuple[list[int], bool, list[dict], str | None, str, str, str | None, dict]:
     """
     Fetch (or return cached) TMDB metadata, including credits,
     production_companies, and original_language for discovery sash logic.
 
     Returns:
-        (genre_ids, is_textless, logos, release_year, title, poster_path, tmdb_data)
+        (genre_ids, is_textless, logos, release_year, title, poster_path,
+         backdrop_path, tmdb_data)
+
+    backdrop_path is a textless landscape backdrop ready to be centre-cropped
+    to portrait when no textless poster exists (handled by main.py). None when
+    TMDB has no language-neutral backdrop for the title.
     """
     endpoint = "tv" if media_type in ("tv", "series") else "movie"
     metadata_cache_key = f"{endpoint}_{tmdb_id}"
@@ -116,6 +121,7 @@ async def fetch_poster_metadata(
             meta["release_year"],
             meta["title"],
             meta["poster_path"],
+            meta.get("backdrop_path"),
             tmdb_data,
         )
 
@@ -128,6 +134,9 @@ async def fetch_poster_metadata(
         params={
             "api_key": tmdb_key,
             "append_to_response": "images,credits",
+            # null = TMDB's signal for language-neutral entries (textless),
+            # which is what we want for both posters and backdrops.
+            "include_image_language": "en,null",
         },
     )
     data = resp.json()
@@ -143,11 +152,14 @@ async def fetch_poster_metadata(
     raw_date = data.get("release_date") or data.get("first_air_date") or ""
     release_year: str | None = raw_date[:4] if len(raw_date) >= 4 else None
 
-    images  = data.get("images", {})
-    posters = images.get("posters", [])
-    logos   = images.get("logos", [])
+    images    = data.get("images", {})
+    posters   = images.get("posters", [])
+    logos     = images.get("logos", [])
+    backdrops = images.get("backdrops", [])
 
-    textless = [p for p in posters if p.get("iso_639_1") is None]
+    # iso_639_1 is None (JSON null) for most textless entries; older TMDB
+    # records occasionally use "" for the same thing — accept both.
+    textless = [p for p in posters if p.get("iso_639_1") in (None, "")]
 
     if textless:
         best = max(textless, key=lambda x: x.get("vote_average", 0))
@@ -158,9 +170,19 @@ async def fetch_poster_metadata(
         is_textless = False
 
     if not poster_path:
-        logger.warning(f"No poster image on TMDB for tmdb_id={tmdb_id} — fallback canvas will be served")
+        logger.warning(f"No poster image on TMDB for tmdb_id={tmdb_id} — backdrop or fallback canvas will be served")
         is_textless = False  # no art, no point fetching logos
-        # poster_path stays None; get_poster will generate a fallback canvas
+        # poster_path stays None; main.py picks backdrop_path or generates a canvas
+
+    # Best textless backdrop. Only consider null/unspecified-language entries —
+    # backdrops with an explicit language tag frequently have title text burned
+    # in. None if no neutral backdrop exists, which suppresses the fallback.
+    backdrop_candidates = [b for b in backdrops if b.get("iso_639_1") in (None, "")]
+    if backdrop_candidates:
+        best_backdrop = max(backdrop_candidates, key=lambda x: x.get("vote_average", 0))
+        backdrop_path: str | None = best_backdrop["file_path"]
+    else:
+        backdrop_path = None
 
     genre_ids            = [g["id"] for g in data.get("genres", [])]
     credits              = data.get("credits", {})
@@ -184,6 +206,7 @@ async def fetch_poster_metadata(
         runtime=runtime,
         number_of_seasons=number_of_seasons,
         number_of_episodes=number_of_episodes,
+        backdrop_path=backdrop_path,
     )
 
     tmdb_data = {
@@ -195,7 +218,7 @@ async def fetch_poster_metadata(
         "number_of_episodes":   number_of_episodes,
     }
 
-    return genre_ids, is_textless, logos, release_year, title, poster_path, tmdb_data
+    return genre_ids, is_textless, logos, release_year, title, poster_path, backdrop_path, tmdb_data
 
 
 async def resolve_imdb_to_tmdb(
@@ -275,6 +298,52 @@ async def fetch_poster_image(
     buf = io.BytesIO()
     image.convert("RGB").save(buf, format="JPEG", quality=92)
     set_cached_tmdb_poster(poster_cache_key, buf.getvalue())
+
+    return image
+
+
+async def fetch_backdrop_image(
+    client: httpx.AsyncClient,
+    tmdb_id: str,
+    backdrop_path: str,
+) -> Image.Image:
+    """
+    Fetch, centre-crop, and cache a TMDB backdrop as a portrait poster.
+
+    Backdrops are 16:9 landscape; we take the full height and cut a centred
+    2:3 strip, giving a clean textless portrait without any AI inpainting.
+    Cached under the same JPEG scheme as regular posters so subsequent hits
+    skip the upstream call. Used by main.py when fetch_poster_metadata
+    returns poster_path=None (no textless or default poster on TMDB).
+    """
+    cache_key = f"backdrop_{tmdb_id}_{backdrop_path.strip('/')}"
+    cached_bytes = get_cached_tmdb_poster(cache_key)
+
+    if cached_bytes:
+        logger.info(f"TMDB backdrop cache hit for {tmdb_id}")
+        image = Image.open(io.BytesIO(cached_bytes)).convert("RGBA")
+        if image.size != (POSTER_WIDTH, POSTER_HEIGHT):
+            image = normalise_poster(image)
+        return image
+
+    # w1280 gives enough resolution to crop to a quality portrait
+    logger.info(f"External API Call: Requested backdrop from TMDB for {tmdb_id}")
+    img_resp = await client.get(f"https://image.tmdb.org/t/p/w1280{backdrop_path}")
+    img_resp.raise_for_status()
+    image = Image.open(io.BytesIO(img_resp.content)).convert("RGBA")
+
+    # Centre-crop 16:9 → 2:3: keep full height, take a centred vertical strip
+    w, h = image.size
+    crop_w = int(h * 2 / 3)
+    if crop_w < w:
+        left = (w - crop_w) // 2
+        image = image.crop((left, 0, left + crop_w, h))
+
+    image = normalise_poster(image)
+
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, format="JPEG", quality=92)
+    set_cached_tmdb_poster(cache_key, buf.getvalue())
 
     return image
 

@@ -90,6 +90,13 @@ LOG_FORMAT              = os.environ.get("LOG_FORMAT", "text").strip().lower()
 # supply their own TMDB/MDBList key; otherwise "operator".
 RATE_LIMIT_RPS          = int(os.environ.get("RATE_LIMIT_RPS", "0"))
 
+# Max concurrent outbound MDBlist API calls (ported from upstream v1.0.0).
+# MDBlist queues or drops requests when hit with too many simultaneous
+# connections from the same key, causing ReadTimeouts even when the service
+# is healthy. 3 is comfortably within their apparent per-key concurrency
+# limit while still allowing good parallelism. Set to 0 to disable the cap.
+MDBLIST_CONCURRENCY     = int(os.environ.get("MDBLIST_CONCURRENCY", "3"))
+
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a
 # Cache-Control: public header so Cloudflare (or any CDN) caches them at the

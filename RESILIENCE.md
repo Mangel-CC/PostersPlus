@@ -785,3 +785,36 @@ Public base default changed: `badge_display_mode` 1→4. Per-preset changes:
 Net: same six preset names (URL contract preserved), same cache cardinality, but the average render is materially cheaper. Anonymous traffic hits the cheaper modes.
 
 Port ready to merge.
+
+### Selective port — upstream v1.0.0 (5b124ca)
+
+Upstream squashed their entire post-`6a4a2ea` development into a single "Release v1.0.0" commit (~1500 lines / 13 files). Lot of it is operational/aesthetic territory that conflicts with this fork (pycairo dependency, gosu, multi-platform Docker, strict requirements.txt pinning, per-section info modals in the configurator). Triaged the new work and applied a focused subset, hand-edited rather than cherry-picked because pycairo + the badge-style sash would have spilled into every file.
+
+**Taken (P0 — security + correctness):**
+
+- **Range-clamped numeric query params** in `build_request_config` — `_f(key, default, lo, hi)` / `_i(key, default, lo, hi)` instead of unbounded `float()`/`int()`. Caps `score_glow_blur` at 50, `badge_height` at 200px, ratios at 0.0–1.5 etc. Stops malicious or careless values from melting a worker (Gaussian kernel at radius 99999, multi-GB image resize).
+- **Expanded log redaction** — the `_TruncateUrlFilter` now redacts `tmdb_key`/`mdblist_key`/`access_key`/`api_key`/`apikey` from `record.msg`, `record.args`, AND pre-formats `record.exc_text` so tracebacks from `logger.exception()` can't leak keys via the formatted upstream URL embedded in an httpx exception.
+- **`draw_score_bar` score=0 empty track** — the track pill is now drawn BEFORE the `fill_w <= 0` early-return so a score of 0 still shows an empty bar rather than disappearing (was visually indistinguishable from "no rating available"). PIL-only port; upstream uses a `_cairo_pill_mask` helper that we skipped along with pycairo.
+
+**Taken (P1 — meaningful new features):**
+
+- **Backdrop fallback** — when TMDB has no textless poster AND no default poster either, the fallback ladder now goes (1) poster, (2) `fetch_backdrop_image` (centre-crops a 16:9 backdrop to 2:3 portrait), (3) `_make_fallback_canvas`. Far better than the previous dark-gradient when art exists. Storage backends got a `backdrop_path` column added to `tmdb_metadata_cache` with idempotent migrations on both SQLite and Postgres. Wired into both `/poster` and `/p` endpoints; when the backdrop is used the watermark + "No Image Available" placeholder are suppressed (it's real art, not a synthetic canvas).
+- **Genre-tinted fallback canvas** — when neither poster nor backdrop exists, the gradient canvas now picks a per-genre RGB tint (deep blood red for horror, indigo for mystery, electric blue for animation, etc.) so the synthetic canvas reads as atmospheric rather than generically dark. Walks `GENRE_PRIORITY` to pick the dominant genre for multi-genre titles.
+- **`MDBLIST_CONCURRENCY` semaphore** — caps concurrent outbound MDBlist HTTP calls (default 3). MDBlist queues or drops requests when hit with too many simultaneous connections from the same key, surfacing as ReadTimeouts under load. The semaphore wraps `fetch_rating` via a thin `_fetch_rating_throttled` helper; bypassed entirely when `MDBLIST_CONCURRENCY=0`.
+
+**Skipped (deliberate fork divergence):**
+
+- **Badge Style sash + Cairo-rasterised badge** — would pull in pycairo (and the libcairo system dep on the image). Cosmetic alternative to the existing diagonal sash; skipping keeps our image lean.
+- **Per-section ⓘ info modals** in the configurator — UX nicety; doesn't move the needle for the public preset-only UI.
+- **`requirements.txt` strict pinning** — conflicts with this fork's hosted-mode deps (psycopg, redis, boto3, prometheus-client, python-json-logger). Different versioning philosophy.
+- **Multi-platform Docker / gosu / dockerfile changes** — we use containers-private with k8s `securityContext`.
+- **MDBlist escalating per-title backoff (30s→2m→8m→1h) + global rate-limit cooldown** — would conflict with our Phase 2 coord-backed backoff (shared across replicas via Redis). The semaphore alone addresses the immediate connection-burst issue; the escalating backoff is a Phase 13 if needed.
+
+**Already in the fork (no-op):**
+
+- `gg_wins`/`gg_noms` split — landed in Phase 5
+- Emmy noms restricted to Outstanding Series only — landed in Phase 5
+- `_safe_cache_path` path-traversal guard — landed in Phase 1
+- Composite cache + rating/render coalescing + lifespan task cancellation + /health + /server-caps + CDN_CACHE_TTL — already done
+
+**Codex review:** first pass clean. Ready to merge.
