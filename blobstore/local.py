@@ -86,7 +86,12 @@ def _put_sync(bucket: str, key: str, data: bytes) -> None:
             f.write(data)
         os.replace(tmp_path, path)
     except Exception as exc:
+        # Propagate so set_cached_final_poster can skip writing the
+        # metadata row. Same contract as the S3 backend — a metadata
+        # row pointing at a missing blob would cause subsequent cache
+        # hits to serve nothing (or 302 to a missing URL) until TTL.
         logger.error(f"Blob cache write error for {bucket}:{key}: {exc}")
+        raise
 
 
 def _delete_sync(bucket: str, key: str) -> None:

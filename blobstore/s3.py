@@ -148,7 +148,12 @@ def _put_sync(bucket: str, key: str, data: bytes, content_type: str | None) -> N
     try:
         _client.put_object(**kwargs)
     except ClientError as exc:
+        # Propagate so set_cached_final_poster can skip writing the
+        # metadata row. Swallowing here left an orphaned row pointing at
+        # an object that was never written — subsequent cache hits 302'd
+        # clients at a missing CDN URL until COMPOSITE_CACHE_TTL elapsed.
         logger.warning(f"S3 PUT error for {obj_key}: {exc}")
+        raise
 
 
 def _delete_sync(bucket: str, key: str) -> None:
