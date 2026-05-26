@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/elfhosted/PostersPlus/compare/v0.5.0...v0.5.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* propagate blob-put failures so orphan metadata rows aren't written ([d968dae](https://github.com/elfhosted/PostersPlus/commit/d968dae12bcf0432ff608b1c34aef7155b7b2ed7))
+* propagate blob-put failures so orphan metadata rows aren't written ([53a2c22](https://github.com/elfhosted/PostersPlus/commit/53a2c2229ecbcf04d3844bb3a9ff951e44c39c71))
+
 ## [0.5.0](https://github.com/elfhosted/PostersPlus/compare/v0.4.0...v0.5.0) (2026-05-26)
 
 
