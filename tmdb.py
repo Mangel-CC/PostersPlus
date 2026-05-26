@@ -158,7 +158,9 @@ async def fetch_poster_metadata(
         is_textless = False
 
     if not poster_path:
-        raise ValueError("No poster available")
+        logger.warning(f"No poster image on TMDB for tmdb_id={tmdb_id} — fallback canvas will be served")
+        is_textless = False  # no art, no point fetching logos
+        # poster_path stays None; get_poster will generate a fallback canvas
 
     genre_ids            = [g["id"] for g in data.get("genres", [])]
     credits              = data.get("credits", {})

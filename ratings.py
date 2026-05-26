@@ -112,6 +112,34 @@ def _score_color(score: int) -> tuple[tuple[int, int, int], tuple[int, int, int]
         return (190, 140, 255), (186, 85, 211)
 
 
+def _score_color_alt(score: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Six-band alternative: dark red → red → dark amber → yellow → dark green → bright green."""
+    if score < 17:    # dark red
+        return (180, 30,  30),  (120, 15,  15)
+    elif score < 34:  # red
+        return (255, 70,  70),  (200, 45,  45)
+    elif score < 50:  # dark amber
+        return (200, 130, 20),  (150, 90,  10)
+    elif score < 67:  # yellow
+        return (255, 215, 60),  (210, 165, 30)
+    elif score < 84:  # dark green
+        return (50,  160, 80),  (25,  110, 50)
+    else:             # bright green
+        return (110, 245, 150), (60,  190, 100)
+
+
+def _score_color_metal(score: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Four-band metal palette mirroring the quality-tier badge colours: grey → bronze → silver → gold."""
+    if score < 50:    # grey
+        return (140, 140, 148), (90,  90,  98)
+    elif score < 70:  # bronze
+        return (210, 120,  50), (150, 80,  25)
+    elif score < 85:  # silver
+        return (218, 224, 240), (155, 165, 195)
+    else:             # gold
+        return (255, 210,  60), (200, 150,  25)
+
+
 def _soften(rgb: tuple[int, int, int], amount: float = 0.9) -> tuple[int, int, int]:
     r, g, b = rgb
     return (
@@ -134,6 +162,7 @@ def draw_score_bar(
     glow_threshold: int = SCORE_GLOW_THRESHOLD,
     glow_blur: int = SCORE_GLOW_BLUR,
     glow_alpha: int = SCORE_GLOW_ALPHA,
+    color_mode: int = 0,
 ) -> None:
     if score is None:
         return
@@ -152,7 +181,8 @@ def draw_score_bar(
     if fill_w <= 0:
         return
     radius = min(bar_h // 2, 8)
-    left_color, right_color = _score_color(score)
+    _color_fn = {1: _score_color_alt, 2: _score_color_metal}.get(color_mode, _score_color)
+    left_color, right_color = _color_fn(score)
     left_color  = _soften(left_color,  0.90)
     right_color = _soften(right_color, 0.90)
 
@@ -228,6 +258,7 @@ def draw_score_bar_vertical(
     y_center: int,
     height: int = 36,
     width: int = 4,
+    color_mode: int = 0,
 ) -> None:
     if score is None:
         return
@@ -238,7 +269,8 @@ def draw_score_bar_vertical(
             return
 
     score = max(0, min(int(score), 100))
-    left_color, right_color = _score_color(score)
+    _color_fn = {1: _score_color_alt, 2: _score_color_metal}.get(color_mode, _score_color)
+    left_color, right_color = _color_fn(score)
     draw = ImageDraw.Draw(image)
     y0 = int(y_center - height / 2)
     y1 = y0 + height

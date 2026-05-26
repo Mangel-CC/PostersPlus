@@ -95,6 +95,8 @@ RATE_LIMIT_RPS          = int(os.environ.get("RATE_LIMIT_RPS", "0"))
 # Cache-Control: public header so Cloudflare (or any CDN) caches them at the
 # edge. Set to 0 to disable (e.g. when running without a CDN).
 CDN_CACHE_TTL         = int(os.environ.get("CDN_CACHE_TTL", "0"))
+# JPEG output quality for composited posters (70–95). Higher = better quality, larger files.
+JPEG_QUALITY          = max(70, min(95, int(os.environ.get("JPEG_QUALITY", "85"))))
 
 # Phase 11: public preset endpoint (/p/{preset}/{type}/{imdb_id}.jpg).
 # When PRESET_ENABLED is true, anonymous requests can hit a small set of
@@ -122,7 +124,7 @@ SHOW_RATING_DISPLAY_MODE = 1
 SHOW_AWARD_SASH          = True
 BADGE_DISPLAY_MODE = 2
 
-# Poster Dimensions
+# Poster Dimensions (500x750)
 
 POSTER_WIDTH  = 500
 POSTER_HEIGHT = 750

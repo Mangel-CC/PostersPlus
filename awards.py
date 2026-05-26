@@ -1215,6 +1215,7 @@ def draw_award_sash(
     image: Image.Image,
     label: str,
     sash_type: str = "win",
+    muted: bool = False,
 ) -> Image.Image:
     width, height = image.size
 
@@ -1283,6 +1284,13 @@ def draw_award_sash(
 
     sash = sash.rotate(-45, expand=True, resample=Image.Resampling.BICUBIC)
     sash = sash.resize((sash.width // SS, sash.height // SS), Image.Resampling.LANCZOS)
+
+    if muted:
+        # Scale alpha to ~85% — sits level with the art rather than above it,
+        # without making the text hard to read.
+        r, g, b, a = sash.split()
+        a = a.point(lambda v: int(v * 0.8))
+        sash = Image.merge("RGBA", (r, g, b, a))
 
     shadow   = Image.new("RGBA", sash.size, (0, 0, 0, 0))
     sd       = ImageDraw.Draw(shadow)

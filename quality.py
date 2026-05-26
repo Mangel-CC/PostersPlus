@@ -170,7 +170,7 @@ async def fetch_quality_from_aiostreams(
         logger.warning(f"AIOStreams circuit open — skipping quality fetch for {imdb_id}")
         return FETCH_FAILED
     except Exception as exc:
-        logger.error(f"AIOStreams fetch error for {imdb_id}: {exc}")
+        logger.error(f"AIOStreams fetch error for {imdb_id}: {type(exc).__name__}: {exc}")
         return FETCH_FAILED
 
 
