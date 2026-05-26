@@ -734,3 +734,54 @@ User direction: drop the access-key unlock UI entirely. "Users wanting more cust
 5. **Pass 5 clean.**
 
 Re-design ready to merge.
+
+### Upstream port — 6a4a2ea (visual features bundle)
+
+Brought in upstream commit [`6a4a2ea`](https://github.com/UmbraProjects/PostersPlus/commit/6a4a2ea08ea407bf5b265fbab5be845f086c4809): mode 4 tier accent bar, three score colour palettes (default / six-band / metal), muted sash, textless logo toggle, no-poster fallback canvas, JPEG_QUALITY config, ETag/304 handling on /poster cache hits, ?debug=1 diagnostic JSON, plus assorted privacy/log fixes.
+
+Other upstream commits skipped (CI/build workflows, README/showcase content, dockerfile gosu rework — all fork-divergent territory).
+
+Hand-resolved conflicts:
+
+- `main.py` cache-hit branch — merged upstream's ETag + 304 into our Phase 10 CDN-redirect + inline structure.
+- `configurator.html` header — kept the ElfHosted brand block; rejected upstream's GitHub-icon-only header.
+
+Extensions on top of the upstream patch:
+
+- Ported the no-poster fallback into the `/p` preset endpoint too (upstream only patched `/poster`).
+- Fixed a duplicate `except ValueError` block upstream had emitted.
+- Updated `/p`'s `wants_badges` guard to include mode 4 — without it the new public-tier default would persist grey "worst tier" bars when quality wasn't yet cached.
+
+Six codex passes to clean. Findings + fixes (all our porting issues, none surfaced in the upstream commit on its own):
+
+1. **[P2]** /p quality guard didn't include mode 4 → grey-tier renders would persist for 24h. Added mode 4 to the guard.
+2. **[P2]** 304 was returned before validating cache freshness → stale ETags could pin clients to expired content. Now we pull cached bytes first; if missing/expired, fall through to re-render.
+3. **[P2]** `?debug=1` could be intercepted by cache hits, returning JPEG instead of diagnostic JSON. Moved the debug check above the cache lookup; debug requests skip cache and don't persist.
+4. **[P2]** Mode 4 rendered a grey "worst tier" bar with empty quality tokens, misrepresenting "unknown" as "bad". Now skips the bar entirely when tokens are empty.
+5. **[P2]** /poster emitted a stable ETag + long Cache-Control on quality-pending transient renders. Both now suppressed for transient renders; short 5-min revalidate window so warmed cache surfaces on the next hit.
+6. **[P2]** Coalesce path also emitted long Cache-Control on potentially-transient renders. Short TTL + no ETag on coalesced responses (the future doesn't carry the leader's transient flag).
+7. **[P2]** Debug JSON crashed with `int(None)` when score was None. Handles None explicitly now.
+8. **[P3]** `textless=true` still fetched the logo PNG before discarding it. fetch_logo skipped when `rcfg.textless`.
+9. **[P2]** Mode 4 glow composite raised ValueError when badge anchors were near 0 (off-canvas dest). Crops the glow layer to the visible region before compositing.
+
+### Preset re-evaluation (post-upstream-port)
+
+With the new render-cheap features (mode 4 tier bar, muted sash, textless toggle, metal palette), I revisited the six presets against the goals of:
+
+- bounded cache cardinality (still 6 distinct `params_hash` values per `(imdb_id, type)`)
+- protected render budget (mode 4 is materially cheaper than the old mode 1 age-rating numeral or mode 2 badge row)
+
+Public base default changed: `badge_display_mode` 1→4. Per-preset changes:
+
+| Preset | Change | Why |
+| --- | --- | --- |
+| `default` | inherits mode 4 from base | Cheaper render than the old age-rating numeral |
+| `awards` | + `badge_display_mode=0`, `muted=true` | Sash truly dominates; muted sash sits in the art not above it |
+| `minimalist` | + `badge_display_mode=0`, `show_award_sash=false`, `textless=true` | Cheapest preset to render — pure poster art with tiny genre tag |
+| `letterboxd` | + `badge_display_mode=0` | Letterboxd aesthetic is score-only, no quality clutter |
+| `cinephile` | + `muted=true`, `score_color_mode=2` (metal) | Metal palette pairs with prestige sash priority; muted sash matches |
+| `quality` | `badge_display_mode` 1→4 | Cheaper than mode 2 row, same "stream quality at a glance" intent |
+
+Net: same six preset names (URL contract preserved), same cache cardinality, but the average render is materially cheaper. Anonymous traffic hits the cheaper modes.
+
+Port ready to merge.
