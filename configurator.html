@@ -1128,6 +1128,28 @@
   }
   .lock-banner-sponsor a:hover { color: var(--gold); }
 
+  /* Build footer — sits at the bottom of the shell, below the main
+     two-column layout. Subtle styling so it's a foot-of-page credit
+     rather than a UI element. */
+  .build-footer {
+    margin-top: 24px;
+    padding: 14px 0 20px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .build-footer a {
+    color: var(--silver-dim);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .build-footer a:hover { color: var(--gold); }
+  .build-footer-version { color: var(--gold-dim); }
+
   /* Anything below Core Config (i.e. the visual configuration sections)
      is locked out when preset-only-mode is active. The user can still
      SEE the sections but can't interact with them — a discoverability
@@ -2017,6 +2039,16 @@
     </div>
   </div>
 
+  <!-- Build footer. version + repo link populated at boot from
+       /server-caps so a fresh image always reports its own release. -->
+  <footer class="build-footer">
+    <a href="https://github.com/elfhosted/PostersPlus"
+       target="_blank" rel="noopener noreferrer">
+      ElfHosted HA public build
+      <span id="build-version" class="build-footer-version">·&nbsp;dev</span>
+    </a>
+  </footer>
+
 </div>
 
 <script>
@@ -2162,6 +2194,13 @@ async function fetchServerCaps() {
   // unlocked state.
   try { applyLockMode(); }   catch(e) { console.warn('applyLockMode failed', e); }
   try { updateKeyBadges(); } catch(e) { console.warn('updateKeyBadges failed', e); }
+  // Build version footer: populate from serverCaps.version. Server
+  // returns "dev" when version.txt is missing (run-local.py against an
+  // untagged tree) — keep that as-is rather than hiding the footer.
+  const versionEl = document.getElementById('build-version');
+  if (versionEl && serverCaps.version) {
+    versionEl.textContent = '· v' + serverCaps.version;
+  }
 }
 
 function updateKeyBadges() {
