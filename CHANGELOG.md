@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/elfhosted/PostersPlus/compare/v1.0.0...v1.0.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* gate preview expand on mobile viewport to avoid desktop scroll lock ([#22](https://github.com/elfhosted/PostersPlus/issues/22)) ([938a9c0](https://github.com/elfhosted/PostersPlus/commit/938a9c08b1eaf3785b470bccd55eadb35a38f364))
+
 ## [1.0.0](https://github.com/elfhosted/PostersPlus/compare/v0.6.0...v1.0.0) (2026-05-26)
 
 
