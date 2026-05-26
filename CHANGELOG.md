@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.2](https://github.com/elfhosted/PostersPlus/compare/v0.5.1...v0.5.2) (2026-05-26)
+
+
+### Bug Fixes
+
+* reload preview when preset dropdown changes ([ec49d30](https://github.com/elfhosted/PostersPlus/commit/ec49d307e8c46a4825a919e940703d5501a258d2))
+* reload preview when the preset dropdown changes ([392e03c](https://github.com/elfhosted/PostersPlus/commit/392e03ce6776196012bf384c313e28af3a30684f))
+
 ## [0.5.1](https://github.com/elfhosted/PostersPlus/compare/v0.5.0...v0.5.1) (2026-05-26)
 
 
