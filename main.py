@@ -989,6 +989,16 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _FONTS_DIR = os.path.join(BASE_DIR, "fonts")
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
+# Build version surfaced via /server-caps so the configurator footer can
+# display it. release-please rewrites version.txt on every release PR,
+# so a fresh image always reports its own tag. Missing file falls back
+# to "dev" — useful when running run-local.py against an untagged tree.
+try:
+    with open(os.path.join(BASE_DIR, "version.txt"), "r", encoding="utf-8") as _f:
+        _BUILD_VERSION = _f.read().strip() or "dev"
+except FileNotFoundError:
+    _BUILD_VERSION = "dev"
+
 
 @app.middleware("http")
 async def remove_server_header(request: Request, call_next):
@@ -1033,6 +1043,7 @@ async def server_caps(access_key: str = ""):
         "preset_enabled":        _cfg.PRESET_ENABLED,
         "presets":               preset_names() if _cfg.PRESET_ENABLED else [],
         "access_key_valid":      access_key_valid,
+        "version":               _BUILD_VERSION,
     }
 
 
