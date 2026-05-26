@@ -1664,6 +1664,20 @@ async def get_poster(
             await fetch_poster_metadata(client, tmdb_id, effective_tmdb_key, type)
         )
 
+        # TMDB genre_ids are always present when the metadata fetch succeeds,
+        # so we resolve a genre label up-front to use as a fallback whenever
+        # MDBlist is unreachable, rate-limited, or unkeyed. Without this, an
+        # exhausted MDBlist key turns every poster's genre tag into "Unknown".
+        _tmdb_genre = "Unknown"
+        if genre_ids:
+            _gid_set = set(genre_ids)
+            for _gid in _cfg.GENRE_PRIORITY:
+                if _gid in _gid_set:
+                    _candidate = _cfg.GENRE_MAP.get(_gid, "")
+                    if _candidate:
+                        _tmdb_genre = _candidate
+                        break
+
         if rating_already_cached or not effective_mdblist_key:
             rating_coro = _resolved(
                 (cached_ratings_dict, cached_genre, cached_release_date, [], cached_age_rating)
@@ -1718,7 +1732,7 @@ async def get_poster(
             await coord.set_backoff(coord.NS_RATING_BACKOFF, imdb_id, ttl_seconds=3600.0)
             logger.info(f"MDBlist back-off set for {imdb_id} (1 hour)")
             ratings_dict   = {}
-            genre          = cached_genre or "Unknown"
+            genre          = cached_genre or _tmdb_genre
             rel            = cached_release_date
             score          = "N/A"
             keywords       = []
@@ -1731,6 +1745,10 @@ async def get_poster(
             is_metacritic  = cached_is_metacritic
         else:
             ratings_dict, genre, rel, keywords, age_rating = rating_result
+            # cached_genre may be None when there's no MDBlist key configured
+            # and nothing has been cached for this title yet — fall back to
+            # the TMDB-derived genre so the badge still renders.
+            genre = genre or _tmdb_genre
 
             if isinstance(ratings_dict, dict):
                 weights = (
