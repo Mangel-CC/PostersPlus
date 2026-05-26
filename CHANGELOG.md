@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/elfhosted/PostersPlus/compare/v0.3.1...v0.4.0) (2026-05-26)
+
+
+### Features
+
+* re-tune presets to leverage cheaper mode-4 tier bar ([bc64f9c](https://github.com/elfhosted/PostersPlus/commit/bc64f9cf4a22df27f96ce21d4be82cae038c0926))
+
+
+### Bug Fixes
+
+* cherry-pick upstream crash fix when no rating data (e26d204) ([460851b](https://github.com/elfhosted/PostersPlus/commit/460851b2f3051dd0bf908dcda073df5ed94a8343))
+
 ## [0.3.1](https://github.com/elfhosted/PostersPlus/compare/v0.3.0...v0.3.1) (2026-05-25)
 
 
