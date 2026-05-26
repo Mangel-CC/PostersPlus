@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/elfhosted/PostersPlus/compare/v0.5.2...v0.6.0) (2026-05-26)
+
+
+### Features
+
+* add sponsor-the-upstream-developer link ([5889a3d](https://github.com/elfhosted/PostersPlus/commit/5889a3df6f94b8e78c16661250fa0008fe44e4ec))
+* add sponsor-the-upstream-developer link ([96a6098](https://github.com/elfhosted/PostersPlus/commit/96a6098724488ad33d7142062b1c9c4387c0e683))
+
 ## [0.5.2](https://github.com/elfhosted/PostersPlus/compare/v0.5.1...v0.5.2) (2026-05-26)
 
 
