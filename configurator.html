@@ -1546,7 +1546,17 @@
                 <option value="medium">Medium</option>
                 <option value="high" selected>High</option>
               </select>
-              <div class="field-hint">Darkening across the top of the poster. Keeps badges and info readable, directs the eye to the centre.</div>
+              <div class="field-hint">The power of the darkening applied to the top.</div>
+            </div>
+            <div class="field">
+              <label class="field-label">Bottom Vignette</label>
+              <select id="cfg-bottom-gradient" onchange="build(); queuePreviewReload()">
+                <option value="off">Off</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high" selected>High</option>
+              </select>
+              <div class="field-hint">Only suggested lowering if you don't use ratings.</div>
             </div>
           </div>
         </div>
@@ -1582,6 +1592,15 @@
             </div>
             <div id="rating-mode1-fields">
               <div class="field">
+                <label class="field-label">Label Suffix</label>
+                <select id="cfg-bar-append" onchange="build(); queuePreviewReload()">
+                  <option value="0" selected>Year</option>
+                  <option value="1">Info sash</option>
+                  <option value="2">Year + Info sash</option>
+                </select>
+                <div class="field-hint">Picks what to append after the genre.</div>
+              </div>
+              <div class="field">
                 <label class="field-label">Font Size</label>
                 <div class="range-row">
                   <input type="range" id="cfg-font-mode1" min="0.04" max="0.16" step="0.005" value="0.08" oninput="updateRange(this,'rng-font1'); build(); queuePreviewReload()">
@@ -1594,15 +1613,6 @@
                   <input type="range" id="cfg-y-mode1" min="0.70" max="0.98" step="0.01" value="0.90" oninput="updateRange(this,'rng-y1'); build(); queuePreviewReload()">
                   <span class="range-val" id="rng-y1">0.90</span>
                 </div>
-              </div>
-              <div class="field">
-                <label class="field-label">Label Suffix</label>
-                <select id="cfg-bar-append" onchange="build(); queuePreviewReload()">
-                  <option value="0" selected>Year</option>
-                  <option value="1">Info sash</option>
-                  <option value="2">Year + Info sash</option>
-                </select>
-                <div class="field-hint">Picks what to append after the genre, joined by " · ". Missing data degrades gracefully — "Info sash" with no sash matched shows just the genre.</div>
               </div>
             </div>
             <div id="rating-mode2-fields" style="display:none;">
@@ -1645,7 +1655,16 @@
               </div>
             </div>
             <div id="rating-mode4-fields" style="display:none;">
-              <div class="field">
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-label">Show Year</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="tog-compact-show-year" onchange="build(); queuePreviewReload()">
+                  <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                </label>
+              </div>
+              <div class="field" style="margin-top:10px;">
                 <label class="field-label">Font Size</label>
                 <div class="range-row">
                   <input type="range" id="cfg-font-mode4" min="0.02" max="0.10" step="0.002" value="0.066" oninput="updateRange(this,'rng-font4'); build(); queuePreviewReload()">
@@ -1658,16 +1677,6 @@
                   <input type="range" id="cfg-y-mode4" min="0.00" max="0.98" step="0.01" value="0.90" oninput="updateRange(this,'rng-y4'); build(); queuePreviewReload()">
                   <span class="range-val" id="rng-y4">0.90</span>
                 </div>
-              </div>
-              <div class="toggle-row" style="margin-top:4px;">
-                <div>
-                  <div class="toggle-label">Show Year</div>
-                  <div class="toggle-sub">Hide the year segment to leave more room for a larger font.</div>
-                </div>
-                <label class="toggle-switch">
-                  <input type="checkbox" id="tog-compact-show-year" onchange="build(); queuePreviewReload()">
-                  <div class="toggle-track"><div class="toggle-thumb"></div></div>
-                </label>
               </div>
               <div class="field-hint" style="margin-top:6px;">All text and both dot separators take the rating-derived colour from the Colour Palette above. I recomend prestige for this mode, as the majority will be silver.</div>
             </div>
@@ -1782,10 +1791,10 @@
               <div class="field">
                 <label class="field-label">Horizontal Position</label>
                 <div class="range-row">
-                  <input type="range" id="cfg-sash-badge-x" min="0.00" max="0.62" step="0.01" value="0.62" oninput="updateRange(this,'rng-sbx'); build(); queuePreviewReload()">
+                  <input type="range" id="cfg-sash-badge-x" min="0.00" max="0.99" step="0.01" value="0.62" oninput="updateRange(this,'rng-sbx'); build(); queuePreviewReload()">
                   <span class="range-val" id="rng-sbx">0.62</span>
                 </div>
-                <div class="field-hint">0.00 = left · 0.31 ≈ centre · 0.62 = right (default, flush with the corner)</div>
+
               </div>
               <div class="field">
                 <label class="field-label">Vertical Position</label>
@@ -1793,6 +1802,14 @@
                   <input type="range" id="cfg-sash-badge-y" min="0.00" max="0.90" step="0.01" value="0.04" oninput="updateRange(this,'rng-sby'); build(); queuePreviewReload()">
                   <span class="range-val" id="rng-sby">0.04</span>
                 </div>
+              </div>
+              <div class="field">
+                <label class="field-label">Size</label>
+                <div class="range-row">
+                  <input type="range" id="cfg-sash-badge-size" min="0.50" max="1.50" step="0.05" value="1.00" oninput="updateRange(this,'rng-sbs'); build(); queuePreviewReload()">
+                  <span class="range-val" id="rng-sbs">1.00</span>
+                </div>
+                
               </div>
             </div>
             <div class="field-hint" style="margin-bottom:10px;">Drag to reorder. Click ✕ to disable a sash — the first matching sash wins.</div>
@@ -2659,7 +2676,8 @@ function buildBaseParams({ usePlaceholders = false } = {}) {
   if (accKey)         params.set('access_key',  accKey);
   if (userTmdbKey)    params.set('tmdb_key',     usePlaceholders ? '{tmdb_key}'    : userTmdbKey);
   if (userMdblistKey) params.set('mdblist_key',  usePlaceholders ? '{mdblist_key}' : userMdblistKey);
-  params.set('top_gradient', vEl('cfg-top-gradient') || 'high');
+  params.set('top_gradient',    vEl('cfg-top-gradient')    || 'high');
+  params.set('bottom_gradient', vEl('cfg-bottom-gradient') || 'high');
 
   // ── Rating / Genre Label ───────────────────────────────────────────────────
   params.set('rating_display_mode', ratingMode);
@@ -2708,8 +2726,9 @@ function buildBaseParams({ usePlaceholders = false } = {}) {
     params.set('sash_badge', isBadge ? 'true' : 'false');
     if (isBadge) {
       // Muted is not compatible with badge style — omit it from URL
-      params.set('sash_badge_x', n('cfg-sash-badge-x').toFixed(2));
-      params.set('sash_badge_y', n('cfg-sash-badge-y').toFixed(2));
+      params.set('sash_badge_x',    n('cfg-sash-badge-x').toFixed(2));
+      params.set('sash_badge_y',    n('cfg-sash-badge-y').toFixed(2));
+      params.set('sash_badge_size', n('cfg-sash-badge-size').toFixed(2));
     } else {
       params.set('muted', c('tog-muted') ? 'true' : 'false');
     }
@@ -3001,13 +3020,18 @@ function importUrl(urlStr) {
     if (_tg === 'false' || _tg === '0' || _tg === 'no')  _tg = 'off';
     if (['off','low','medium','high'].includes(_tg)) _setEl('cfg-top-gradient', _tg);
   }
+  if (p.has('bottom_gradient')) {
+    const _bg = (p.get('bottom_gradient') || '').toLowerCase();
+    if (['off','low','medium','high'].includes(_bg)) _setEl('cfg-bottom-gradient', _bg);
+  }
 
   // ── Sash ────────────────────────────────────────────────────────────────
   if (p.has('show_award_sash')) _setEl('tog-award-sash',    p.get('show_award_sash'));
   if (p.has('muted'))           _setEl('tog-muted',         p.get('muted'));
   if (p.has('sash_badge'))      _setEl('tog-sash-badge',    p.get('sash_badge'));
-  if (p.has('sash_badge_x'))    _setEl('cfg-sash-badge-x',  p.get('sash_badge_x'));
-  if (p.has('sash_badge_y'))    _setEl('cfg-sash-badge-y',  p.get('sash_badge_y'));
+  if (p.has('sash_badge_x'))    _setEl('cfg-sash-badge-x',     p.get('sash_badge_x'));
+  if (p.has('sash_badge_y'))    _setEl('cfg-sash-badge-y',     p.get('sash_badge_y'));
+  if (p.has('sash_badge_size')) _setEl('cfg-sash-badge-size',  p.get('sash_badge_size'));
   updateSashBadgeFields();
 
   if (p.has('sash_priority')) {
@@ -3082,7 +3106,31 @@ function importUrl(urlStr) {
   return true;
 }
 
+// Override any browser-side form-state restoration that would otherwise
+// leak old slider / checkbox / dropdown values across a server rebuild.
+// Firefox especially restores form values by element ID on reload, which
+// drifts when the HTML defaults change between versions — the symptom
+// users see is "sliders went crazy after rebuild, had to click Reset".
+//
+// Only cfg-* and tog-* controls are touched.  Text and hidden inputs
+// are deliberately skipped — those are user-owned (API keys, search
+// query) or hydrated separately (resolved IDs, domain).
+function _resetFormToDefaults() {
+  document.querySelectorAll('[id^="cfg-"],[id^="tog-"]').forEach(el => {
+    if (el.type === 'range' || el.type === 'number') {
+      el.value = el.defaultValue;
+      // Don't dispatchEvent — would cascade into build()/queuePreviewReload()
+      // mid-init.  The range-display setup loop below picks up the new value.
+    } else if (el.type === 'checkbox') {
+      el.checked = el.defaultChecked;
+    } else if (el.tagName === 'SELECT') {
+      for (const opt of el.options) opt.selected = opt.defaultSelected;
+    }
+  });
+}
+
 // Init
+_resetFormToDefaults();
 buildWeightSection('movie-weights', MOVIE_SOURCES, DEFAULT_MOVIE_W);
 buildWeightSection('tv-weights',    TV_SOURCES,    DEFAULT_TV_W);
 
@@ -3183,6 +3231,7 @@ initCustomMobileSliders();
             <dt>MDBlist Key</dt>  <dd>Required for ratings, awards, and keyword data. If the server host has set this you don't need it.</dd>
             <dt>Language</dt>    <dd>Posters+ will make the request in the language that you use, if it's not available it'll fallback to English.</dd>
             <dt>Top Vignette</dt><dd>A dark fade across the top of the poster that keeps badges and age ratings readable over bright art. Four levels: Off / Low (subtle), Medium (balanced), High (strongest — the legacy look). Lower presets work better on art that's already dark up top.</dd>
+            <dt>Bottom Vignette</dt><dd>Same four-level scale as the Top Vignette but for the bottom of the poster. Mainly useful if you've hidden the rating label and don't need the dark fade behind it — drop to Low or Off to let the art breathe. Use High (default) or Medium when you have a Score Bar / Clean / Minimalist / Compact label down there.</dd>
           </dl>
         </div>
       </div>

@@ -342,10 +342,12 @@ class RequestConfig:
     muted: bool = False
     textless: bool = False
     score_color_mode: int = 2
-    top_gradient: str = "high"   # off | low | medium | high — strength of the top vignette
+    top_gradient:    str = "high"   # off | low | medium | high — strength of the top vignette
+    bottom_gradient: str = "high"   # off | low | medium | high — strength of the bottom vignette
     sash_badge: bool = False   # True → badge style instead of diagonal sash
-    sash_badge_x: float = 0.62   # badge left-edge as fraction of poster width (flush right with the corner)
-    sash_badge_y: float = 0.04   # badge top-edge  as fraction of poster height
+    sash_badge_x:    float = 0.62   # badge left-edge as fraction of poster width (flush right with the corner)
+    sash_badge_y:    float = 0.04   # badge top-edge  as fraction of poster height
+    sash_badge_size: float = 1.0    # uniform scale of badge dimensions (1.0 = default footprint)
 
 
 def _parse_bool(val: str | None, default: bool) -> bool:
@@ -431,10 +433,20 @@ def build_request_config(params: dict) -> RequestConfig:
     elif _tg_raw in ("false", "0", "no"):
         cfg.top_gradient = "off"
     # else: leave RequestConfig default ("high")
+
+    # bottom_gradient — same four-level enum as top.  Brand-new param so no
+    # legacy boolean form to honour; unknown values fall through to the
+    # RequestConfig default ("high") which matches the legacy behaviour.
+    _bg_raw = (params.get("bottom_gradient") or "").strip().lower()
+    if _bg_raw in _BOTTOM_GRADIENT_LEVELS:
+        cfg.bottom_gradient = _bg_raw
     cfg.sash_badge              = _b("sash_badge",             cfg.sash_badge)
     # Position ratios — full poster span so users can put the badge anywhere
     cfg.sash_badge_x            = _f("sash_badge_x",           cfg.sash_badge_x,           0.0, 1.0)
     cfg.sash_badge_y            = _f("sash_badge_y",           cfg.sash_badge_y,           0.0, 1.0)
+    # Capped at 1.5× — beyond that the badge would auto-displace via the
+    # in-renderer clamp at the default x position, which is confusing UX.
+    cfg.sash_badge_size         = _f("sash_badge_size",        cfg.sash_badge_size,        0.5, 1.5)
     cfg.score_color_mode        = _i("score_color_mode",       cfg.score_color_mode,       0,   2)
     cfg.badge_display_mode      = _i("badge_display_mode",     cfg.badge_display_mode,     0,   4)
     cfg.rating_display_mode     = _i("rating_display_mode",    cfg.rating_display_mode,    0,   4)
@@ -535,6 +547,23 @@ _TOP_GRADIENT_LEVELS: dict[str, tuple[float, int] | None] = {
     "medium": (0.25, 190),
     "high":   (0.40, 220),
 }
+
+# Bottom-vignette strength.  Same shape as the top gradient — (height_ratio,
+# max_alpha).  Defaults to "high" which matches the legacy alpha-255 / 50%-
+# height fade.  The previous auto-softening for Minimalist/Compact rating
+# modes is dropped now that users can pick the level themselves; if you
+# liked the softer look on those modes, set bottom_vignette=medium.
+_BOTTOM_GRADIENT_LEVELS: dict[str, tuple[float, int] | None] = {
+    "off":    None,
+    "low":    (0.30, 180),
+    "medium": (0.40, 220),
+    "high":   (0.50, 255),
+}
+# Easing exponent shared across all bottom-gradient presets — controls the
+# curve shape (1.0 = linear; >1 starts darker at the bottom and fades faster
+# at the top).  Decoupled from strength so retuning one doesn't affect the
+# other.
+_BOTTOM_GRADIENT_CURVE = 1.2
 
 # Genre-specific tint multipliers (R, G, B) for the fallback canvas.
 # Applied to a dark base luminance of 10–18, so the dominant channel peaks
@@ -640,21 +669,25 @@ def build_poster(
         image.paste(top_tinted, (0, 0), mask=top_tinted)
 
     # --- BOTTOM GRADIENT (vectorised) ---
-    # Minimalist mode sits closer to the bottom edge with a smaller label, so a
-    # lighter fade is enough to keep contrast without over-darkening the poster.
-    bottom_height = int(height * 0.5)
-    bottom_start = height - bottom_height
-    # Minimalist (3) and Compact (4) both use a small bottom-line label, so a
-    # lighter fade leaves more of the art visible while still keeping contrast.
-    bottom_max_alpha = 225 if cfg.rating_display_mode in (3, 4) else 245
-    bottom_curve = 1.2
-    t_bot = np.linspace(0, 1, bottom_height, dtype=np.float32)
-    eased_bot = ((1 - (1 - t_bot) ** bottom_curve) * bottom_max_alpha).astype(np.uint8)
-    bottom_array = np.broadcast_to(eased_bot[:, np.newaxis], (bottom_height, width)).copy()
-    bottom_overlay = Image.fromarray(bottom_array, mode="L")
-    bottom_tinted = Image.new("RGBA", (width, bottom_height), (0, 0, 0, 0))
-    bottom_tinted.putalpha(bottom_overlay)
-    image.paste(bottom_tinted, (0, bottom_start), mask=bottom_tinted)
+    # Strength is one of four presets (off / low / medium / high) — see
+    # _BOTTOM_GRADIENT_LEVELS for the (height_ratio, max_alpha) tuple each
+    # level uses.  The previous auto-softening for Minimalist / Compact modes
+    # is dropped now that the user can pick the level themselves; if you'd
+    # like the lighter fade those modes used to get for free, pick "medium".
+    # Unknown level falls back to "high" so a typo can't accidentally turn
+    # the fade off entirely (which would break label legibility).
+    _bg_preset = _BOTTOM_GRADIENT_LEVELS.get(cfg.bottom_gradient, _BOTTOM_GRADIENT_LEVELS["high"])
+    if _bg_preset is not None:
+        bottom_height_ratio, bottom_max_alpha = _bg_preset
+        bottom_height = int(height * bottom_height_ratio)
+        bottom_start  = height - bottom_height
+        t_bot         = np.linspace(0, 1, bottom_height, dtype=np.float32)
+        eased_bot     = ((1 - (1 - t_bot) ** _BOTTOM_GRADIENT_CURVE) * bottom_max_alpha).astype(np.uint8)
+        bottom_array  = np.broadcast_to(eased_bot[:, np.newaxis], (bottom_height, width)).copy()
+        bottom_overlay = Image.fromarray(bottom_array, mode="L")
+        bottom_tinted  = Image.new("RGBA", (width, bottom_height), (0, 0, 0, 0))
+        bottom_tinted.putalpha(bottom_overlay)
+        image.paste(bottom_tinted, (0, bottom_start), mask=bottom_tinted)
 
     # --- Badge / quality overlay ---
     mode   = cfg.badge_display_mode
@@ -915,7 +948,9 @@ def build_poster(
         label, sash_type = sash_result
         if cfg.sash_badge:
             image = draw_award_badge(image, label, sash_type=sash_type,
-                                     x_ratio=cfg.sash_badge_x, y_ratio=cfg.sash_badge_y)
+                                     x_ratio=cfg.sash_badge_x,
+                                     y_ratio=cfg.sash_badge_y,
+                                     size_ratio=cfg.sash_badge_size)
         else:
             image = draw_award_sash(image, label, sash_type=sash_type, muted=cfg.muted)
 
@@ -1005,14 +1040,24 @@ async def server_caps(access_key: str = ""):
 # ---------------------------------------------------------------------------
 
 _configurator_html: str | None = None
+# Strong ETag for the configurator HTML — short hash of its bytes so the
+# browser can revalidate cheaply.  Without this, browsers heuristically
+# cache the page and keep serving stale HTML after a container rebuild,
+# which is what made sliders / dropdowns drift out of sync with the new
+# defaults until a manual Reset.
+_configurator_etag: str | None = None
 
 
 def _load_configurator_html() -> str:
+    global _configurator_etag
     html_path = os.path.join(os.path.dirname(__file__), "configurator.html")
     try:
         with open(html_path, "r", encoding="utf-8") as f:
-            return f.read()
+            content = f.read()
+        _configurator_etag = '"' + hashlib.md5(content.encode("utf-8")).hexdigest()[:16] + '"'
+        return content
     except FileNotFoundError:
+        _configurator_etag = '"missing"'
         return "<h1>Configurator not found</h1><p>Place configurator.html alongside main.py</p>"
 
 
@@ -1023,7 +1068,7 @@ async def health_check():
 
 
 @app.get("/", response_class=HTMLResponse)
-async def get_configurator(access_key: str = "", reload: str = ""):
+async def get_configurator(request: Request, access_key: str = "", reload: str = ""):
     if _cfg.ACCESS_KEY and not hmac.compare_digest(access_key, _cfg.ACCESS_KEY):
         raise HTTPException(status_code=403, detail="Unauthorized. Provide ?access_key=<key>")
     # ?reload=1 re-reads configurator.html from disk — useful while iterating on
@@ -1033,7 +1078,27 @@ async def get_configurator(access_key: str = "", reload: str = ""):
     if reload:
         _configurator_html = _load_configurator_html()
         logger.info("Configurator HTML reloaded from disk")
-    return HTMLResponse(content=_configurator_html or _load_configurator_html())
+
+    if _configurator_html is None:
+        _load_configurator_html()  # populates the global
+
+    # 304 short-circuit when the browser's cached copy still matches —
+    # saves the 130 KB body re-download on every navigation while still
+    # forcing a fresh fetch as soon as the file's contents change.
+    _cache_headers = {
+        "Cache-Control": "no-cache, must-revalidate",
+        "ETag":          _configurator_etag or '""',
+    }
+    if (
+        _configurator_etag
+        and request.headers.get("if-none-match") == _configurator_etag
+    ):
+        return Response(status_code=304, headers=_cache_headers)
+
+    return HTMLResponse(
+        content=_configurator_html or _load_configurator_html(),
+        headers=_cache_headers,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -1302,6 +1302,7 @@ def draw_award_badge(
     sash_type: str = "win",
     x_ratio: float = 0.62,   # left edge of badge as fraction of poster width (flush right)
     y_ratio: float = 0.04,   # top  edge of badge as fraction of poster height
+    size_ratio: float = 1.0, # multiplier on the badge's default (height + width) — keeps aspect
 ) -> Image.Image:
     """
     Alternative to draw_award_sash: a compact rounded rectangle badge trimmed
@@ -1331,8 +1332,12 @@ def draw_award_badge(
         border_rgb = (192, 192, 200)
 
     # ── Dimensions ───────────────────────────────────────────────────────────
-    badge_h  = int(height * 0.075)
-    badge_w  = int(width  * 0.34)   # fixed — consistent regardless of label length
+    # Both dimensions take the same multiplier so the badge keeps its aspect
+    # ratio — gives the user one knob without making them fight aspect drift.
+    # Radius, border thickness, and font size are all derived from badge_h
+    # below so they scale automatically with size_ratio.
+    badge_h  = int(height * 0.075 * size_ratio)
+    badge_w  = int(width  * 0.34  * size_ratio)   # fixed-width across labels, scaled by size
     radius   = int(badge_h * 0.32)
     border_w = max(1, int(badge_h * 0.055))
 
