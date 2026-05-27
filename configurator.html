@@ -1567,6 +1567,7 @@
                 <option value="1" selected>Score Bar</option>
                 <option value="2">Clean</option>
                 <option value="3">Minimalist</option>
+                <option value="4">Compact</option>
               </select>
             </div>
             <div id="rating-alt-colors-toggle" style="margin-bottom:14px;">
@@ -1593,6 +1594,15 @@
                   <input type="range" id="cfg-y-mode1" min="0.70" max="0.98" step="0.01" value="0.90" oninput="updateRange(this,'rng-y1'); build(); queuePreviewReload()">
                   <span class="range-val" id="rng-y1">0.90</span>
                 </div>
+              </div>
+              <div class="field">
+                <label class="field-label">Label Suffix</label>
+                <select id="cfg-bar-append" onchange="build(); queuePreviewReload()">
+                  <option value="0" selected>Year</option>
+                  <option value="1">Info sash</option>
+                  <option value="2">Year + Info sash</option>
+                </select>
+                <div class="field-hint">Picks what to append after the genre, joined by " · ". Missing data degrades gracefully — "Info sash" with no sash matched shows just the genre.</div>
               </div>
             </div>
             <div id="rating-mode2-fields" style="display:none;">
@@ -1633,6 +1643,33 @@
                   <span class="range-val" id="rng-y3">0.92</span>
                 </div>
               </div>
+            </div>
+            <div id="rating-mode4-fields" style="display:none;">
+              <div class="field">
+                <label class="field-label">Font Size</label>
+                <div class="range-row">
+                  <input type="range" id="cfg-font-mode4" min="0.02" max="0.10" step="0.002" value="0.066" oninput="updateRange(this,'rng-font4'); build(); queuePreviewReload()">
+                  <span class="range-val" id="rng-font4">0.066</span>
+                </div>
+              </div>
+              <div class="field">
+                <label class="field-label">Vertical Position</label>
+                <div class="range-row">
+                  <input type="range" id="cfg-y-mode4" min="0.00" max="0.98" step="0.01" value="0.90" oninput="updateRange(this,'rng-y4'); build(); queuePreviewReload()">
+                  <span class="range-val" id="rng-y4">0.90</span>
+                </div>
+              </div>
+              <div class="toggle-row" style="margin-top:4px;">
+                <div>
+                  <div class="toggle-label">Show Year</div>
+                  <div class="toggle-sub">Hide the year segment to leave more room for a larger font.</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="tog-compact-show-year" onchange="build(); queuePreviewReload()">
+                  <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                </label>
+              </div>
+              <div class="field-hint" style="margin-top:6px;">All text and both dot separators take the rating-derived colour from the Colour Palette above. I recomend prestige for this mode, as the majority will be silver.</div>
             </div>
             <div id="rating-glow-fields" style="margin-top:10px;">
               <div class="field">
@@ -2627,13 +2664,14 @@ function buildBaseParams({ usePlaceholders = false } = {}) {
   // ── Rating / Genre Label ───────────────────────────────────────────────────
   params.set('rating_display_mode', ratingMode);
   if (ratingMode !== 0) {
-    // Colour palette: only exposed in the UI for modes 1 and 3
-    if (ratingMode === 1 || ratingMode === 3) {
+    // Colour palette: exposed for the modes whose pip/score colour visibly uses it
+    if (ratingMode === 1 || ratingMode === 3 || ratingMode === 4) {
       params.set('score_color_mode', ni('cfg-score-color-mode'));
     }
     if (ratingMode === 1) {
       params.set('accent_bar_font_size_ratio', n('cfg-font-mode1').toFixed(3));
       params.set('accent_bar_y_offset',        n('cfg-y-mode1').toFixed(2));
+      params.set('accent_bar_append_mode',     ni('cfg-bar-append'));
       params.set('score_glow_threshold', ni('cfg-glow-thresh'));
       params.set('score_glow_blur',      ni('cfg-glow-blur'));
       params.set('score_glow_alpha',     ni('cfg-glow-alpha'));
@@ -2644,6 +2682,10 @@ function buildBaseParams({ usePlaceholders = false } = {}) {
       params.set('minimalist_mode_font_size_ratio', n('cfg-font-mode3').toFixed(3));
       params.set('minimalist_mode_font_x_offset',   n('cfg-x-mode3').toFixed(3));
       params.set('minimalist_mode_font_y_offset',   n('cfg-y-mode3').toFixed(3));
+    } else if (ratingMode === 4) {
+      params.set('compact_font_size_ratio', n('cfg-font-mode4').toFixed(3));
+      params.set('compact_y_offset',        n('cfg-y-mode4').toFixed(2));
+      params.set('compact_show_year',       c('tog-compact-show-year') ? 'true' : 'false');
     }
     // Rating weights only affect the displayed score
     const mw = getWeights('movie-weights', MOVIE_SOURCES);
@@ -2671,6 +2713,16 @@ function buildBaseParams({ usePlaceholders = false } = {}) {
     } else {
       params.set('muted', c('tog-muted') ? 'true' : 'false');
     }
+  }
+  // sash_priority is consumed not just by the diagonal sash but also by:
+  //   - Compact rating mode (mode 4) — always pulls a sash label
+  //   - Score Bar mode (mode 1) with Label Suffix = Info sash | Year + Info sash
+  // Emit it whenever ANY of those is active so the user's drag-to-reorder /
+  // disable choices are respected, not silently overridden by server defaults.
+  const _sashTextNeeded = showSash
+    || ratingMode === 4
+    || (ratingMode === 1 && ni('cfg-bar-append') !== 0);
+  if (_sashTextNeeded) {
     params.set('sash_priority', getSashPriorityParam());
   }
 
@@ -2708,7 +2760,11 @@ async function copyUrl() {
 
 function resetDefaults() {
   const preserve = new Set(['cfg-tmdb-key','cfg-mdblist-key','cfg-access-key','cfg-domain','cfg-search-query']);
-  document.querySelectorAll('[id^="cfg-"]').forEach(el => {
+  // Reset both cfg-* (inputs / selects) AND tog-* (toggle checkboxes).  The
+  // tog- prefix was previously excluded, which left toggle state surviving
+  // a reset — visible regression for the Compact Show Year toggle, latent
+  // pre-existing bug for textless / muted / sash-badge / award-sash.
+  document.querySelectorAll('[id^="cfg-"],[id^="tog-"]').forEach(el => {
     if (preserve.has(el.id)) return;
     if (el.type === 'range' || el.type === 'number' || el.type === 'text') {
       el.value = el.defaultValue;
@@ -2724,6 +2780,12 @@ function resetDefaults() {
   sashDisabled = new Set();
   localStorage.removeItem('postersplus_sash_order');
   buildSashList();
+  // Refresh the mode-conditional field visibility so the blocks for the
+  // *previously-selected* rating / badge mode don't linger after the parent
+  // dropdown reverts to its default (e.g. resetting from Compact would
+  // leave the Show Year toggle on screen even though mode is now Score Bar).
+  updateRatingFields();
+  updateBadgeModeHint();
   updateSashBadgeFields();
   build();
   collapsePreview();
@@ -2804,8 +2866,9 @@ function updateRatingFields() {
   document.getElementById('rating-mode1-fields').style.display      = mode === 1 ? '' : 'none';
   document.getElementById('rating-mode2-fields').style.display      = mode === 2 ? '' : 'none';
   document.getElementById('rating-mode3-fields').style.display      = mode === 3 ? '' : 'none';
+  document.getElementById('rating-mode4-fields').style.display      = mode === 4 ? '' : 'none';
   document.getElementById('rating-glow-fields').style.display       = mode === 1 ? '' : 'none';
-  document.getElementById('rating-alt-colors-toggle').style.display = (mode === 1 || mode === 3) ? '' : 'none';
+  document.getElementById('rating-alt-colors-toggle').style.display = (mode === 1 || mode === 3 || mode === 4) ? '' : 'none';
 }
 
 // ---------------------------------------------------------------------------
@@ -2965,12 +3028,16 @@ function importUrl(urlStr) {
   // ── Rating display ──────────────────────────────────────────────────────
   if (p.has('rating_display_mode'))            _setEl('cfg-rating-mode',  p.get('rating_display_mode'));
   if (p.has('accent_bar_font_size_ratio'))     _setEl('cfg-font-mode1',   p.get('accent_bar_font_size_ratio'));
+  if (p.has('accent_bar_append_mode'))         _setEl('cfg-bar-append',   p.get('accent_bar_append_mode'));
   if (p.has('numeric_score_font_size_ratio'))  _setEl('cfg-font-mode2',   p.get('numeric_score_font_size_ratio'));
   if (p.has('accent_bar_y_offset'))            _setEl('cfg-y-mode1',      p.get('accent_bar_y_offset'));
   if (p.has('numeric_score_y_offset'))         _setEl('cfg-y-mode2',      p.get('numeric_score_y_offset'));
   if (p.has('minimalist_mode_font_size_ratio'))_setEl('cfg-font-mode3',   p.get('minimalist_mode_font_size_ratio'));
   if (p.has('minimalist_mode_font_x_offset'))  _setEl('cfg-x-mode3',      p.get('minimalist_mode_font_x_offset'));
   if (p.has('minimalist_mode_font_y_offset'))  _setEl('cfg-y-mode3',      p.get('minimalist_mode_font_y_offset'));
+  if (p.has('compact_font_size_ratio')) _setEl('cfg-font-mode4',         p.get('compact_font_size_ratio'));
+  if (p.has('compact_y_offset'))        _setEl('cfg-y-mode4',            p.get('compact_y_offset'));
+  if (p.has('compact_show_year'))       _setEl('tog-compact-show-year',  p.get('compact_show_year'));
   if (p.has('score_glow_threshold'))           _setEl('cfg-glow-thresh',  p.get('score_glow_threshold'));
   if (p.has('score_glow_blur'))                _setEl('cfg-glow-blur',    p.get('score_glow_blur'));
   if (p.has('score_glow_alpha'))               _setEl('cfg-glow-alpha',   p.get('score_glow_alpha'));
@@ -3129,6 +3196,7 @@ initCustomMobileSliders();
             <dt>Score Bar</dt>   <dd>Horizontal gradient bar with a percentage fill based on the rating. Under 50, 50 to 69, 70 to 84 and 85+ are the color tiers. Six band uses six tiers, instead.</dd>
             <dt>Clean</dt>     <dd>Genre ★ score as centred text near the bottom. Omits year and the score bar.</dd>
             <dt>Minimalist</dt>  <dd>Small render in the bottom right, the score seperator uses the same mechanics as score bar as a solid color rather than fill. The bottom vignette is also intentionally weaker in this mode.</dd>
+            <dt>Compact</dt>     <dd>"All info in one strip" — Genre · Year · Info sash text, centred near the bottom. The whole line (text and both dot separators) is painted in the rating-derived colour from the chosen palette, so the line itself doubles as the score signal. Falls back to silver if no rating is available. Toggle Show Year off if you'd rather drop the year and use the freed-up space for a larger font. Compact never disables other layers — keep the diagonal sash or quality badges too if you want.</dd>
           </dl>
         </div>
         <div class="info-section" style="margin-top:16px">
@@ -3146,6 +3214,16 @@ initCustomMobileSliders();
             <li>Font size and vertical position are intended for customization across many clients.</li>
             <li>In Minimalist mode, horizontal offset moves the pip away from the edge to improve client compatibility.</li>
           </ul>
+        </div>
+        <div class="info-section" style="margin-top:16px">
+          <div class="info-section-title">Preservation Mode</div>
+          <p>If you want to leave as much of the original art untouched as possible, combine:</p>
+          <ul>
+            <li>Rating display → <strong style="color:var(--silver-dim)">Compact</strong> (small single line at the bottom, score-coloured)</li>
+            <li>Core Config → Top Vignette → <strong style="color:var(--silver-dim)">Off</strong> or <strong style="color:var(--silver-dim)">Low</strong></li>
+            <li>Quality Badges → <strong style="color:var(--silver-dim)">Hidden</strong> (or stick with Quality Notch for a small accent)</li>
+          </ul>
+          <p style="margin-top:6px">This is the most art-respecting configuration — no top-corner overlays, no top fade, just a small text strip at the bottom that doubles as the rating signal via colour.</p>
         </div>
       </div>
 

@@ -302,6 +302,32 @@ def draw_score_bar(
 # Score bar  (vertical pip)
 # ---------------------------------------------------------------------------
 
+def _draw_solid_pip(
+    image: Image.Image,
+    *,
+    x: float,
+    y_center: int,
+    width: int,
+    height: int,
+    color: tuple[int, int, int],
+) -> None:
+    """Draw a single solid-colour cairo-antialiased pill pip onto *image*.
+
+    Shared primitive used by both score-driven pips (where the caller computes
+    the colour from the score palette) and decoration pips in compact mode
+    (where the colour comes from a tier / sash palette).
+    """
+    y0     = int(y_center - height / 2)
+    radius = max(1, width // 2)
+
+    pip_mask  = _cairo_pill_mask(width, height, radius)
+    pip_strip = Image.new("RGBA", (width, height), (*color, 0))
+    pip_strip.putalpha(pip_mask)
+    pip_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    pip_layer.paste(pip_strip, (int(x), y0))
+    image.alpha_composite(pip_layer)
+
+
 def draw_score_bar_vertical(
     image: Image.Image,
     score: int | str,
@@ -322,16 +348,152 @@ def draw_score_bar_vertical(
 
     score = max(0, min(int(score), 100))
     _color_fn = {1: _score_color_alt, 2: _score_color_metal}.get(color_mode, _score_color)
-    left_color, right_color = _color_fn(score)
-    y0     = int(y_center - height / 2)
-    radius = max(1, width // 2)
+    left_color, _right_color = _color_fn(score)
+    _draw_solid_pip(image, x=x, y_center=y_center, width=width, height=height, color=left_color)
 
-    pip_mask  = _cairo_pill_mask(width, height, radius)
-    pip_strip = Image.new("RGBA", (width, height), (*left_color, 0))
-    pip_strip.putalpha(pip_mask)
-    pip_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    pip_layer.paste(pip_strip, (int(x), y0))
-    image.alpha_composite(pip_layer)
+
+# ---------------------------------------------------------------------------
+# Compact label  (rating_display_mode == 4)
+# ---------------------------------------------------------------------------
+# Single bottom-centre line that crams genre, year and the info-sash text into
+# one strip joined by middle-dot separators:
+#
+#     Genre · Year · Sash text
+#
+# Every glyph (text + both dots) is painted with one colour derived from the
+# score palette, so the whole line acts as a single "this is good / bad" cue
+# at a glance.  Falls back to silver if no score is available.
+#
+# Additive: this mode doesn't disable the diagonal sash or quality badges; if
+# both are wanted, both render.
+
+# Neutral fallbacks for the compact line when there's no usable score.
+#
+# Silver works as a "no info" colour for the Light (0) and Dark-light (1)
+# palettes because neither palette actually uses silver as a tier.
+#
+# Prestige (2) does — silver IS its 70-84 tier — so falling back to silver
+# there would falsely signal "this is a silver-tier title".  Prestige uses
+# the same grey its <50 tier uses, so an unrated title visually groups with
+# bottom-tier scores rather than mid-tier ones.  Worse to over-promise than
+# under-promise on an unknown.
+_COMPACT_SILVER         = (235, 235, 235)
+_COMPACT_PRESTIGE_GREY  = (140, 140, 148)  # matches _score_color_metal's <50 tier
+
+
+def _compact_no_score_color(score_color_mode: int) -> tuple[int, int, int]:
+    return _COMPACT_PRESTIGE_GREY if score_color_mode == 2 else _COMPACT_SILVER
+
+
+def _compact_palette_color(
+    score: int | str,
+    score_color_mode: int,
+) -> tuple[int, int, int]:
+    """Resolve the score-palette colour for the compact line.
+
+    Returns a palette-aware no-score fallback when the score is missing or
+    non-numeric so the line still renders (just without the rating-quality
+    cue) — see _compact_no_score_color for the per-palette choice."""
+    if score in ("N/A", None, ""):
+        return _compact_no_score_color(score_color_mode)
+    try:
+        s = max(0, min(int(score), 100))
+    except (ValueError, TypeError):
+        return _compact_no_score_color(score_color_mode)
+    color_fn = {1: _score_color_alt, 2: _score_color_metal}.get(
+        score_color_mode, _score_color
+    )
+    left_color, _ = color_fn(s)
+    return left_color
+
+
+def draw_compact_label(
+    image: Image.Image,
+    *,
+    genre: str,
+    year: str | int | None,
+    score: int | str,
+    sash_label: str | None = None,
+    sash_type: str | None = None,
+    font_size_ratio: float = 0.055,
+    y_offset: float = 0.92,
+    score_color_mode: int = 0,
+    show_year: bool = True,
+    font_path: str | None = None,
+) -> None:
+    """Render the compact bottom-centre line:  Genre · Year · Sash text.
+
+    Separators inherit the line's colour for free (single draw.text call) so
+    nothing has to be coloured manually.
+
+    Winner / nominee disambiguation
+    -------------------------------
+    When sash_type == "win" the separator immediately before the sash text
+    becomes "★" instead of "·".  Award winners and nominees often share the
+    same label string ("Best Picture", "Golden Globe") — in sash / badge
+    modes their colours distinguish them, but in this text-only mode they'd
+    otherwise look identical.  The star is the universal "winner" mark and
+    occupies the same horizontal slot as the dot so the line length doesn't
+    change.
+
+    Segments are auto-omitted when their data is missing or suppressed:
+      - show_year=False or no year → drops the first dot   (Genre · Sash)
+      - no sash                    → drops the second dot  (Genre · Year)
+      - both → just Genre
+
+    Hiding the year frees up roughly 5-6 characters of horizontal space, so
+    callers can pair show_year=False with a larger font_size_ratio to make
+    the remaining content read bigger without overflowing the poster width.
+    """
+    from PIL import ImageDraw, ImageFont
+    import os
+
+    W, H = image.size
+    font_size = max(8, int(W * font_size_ratio))
+
+    if font_path is None:
+        # Inter-Bold — the rest of the rendering pipeline (modes 1, 2, 3,
+        # sashes, badges) all use Inter-Bold too.  Worth noting: Compact
+        # mode uses ★ (U+2605) to mark award winners and Ubuntu-Bold
+        # doesn't ship that glyph, so Inter is also the right choice
+        # specifically for this renderer.
+        font_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "fonts", "Inter-Bold.ttf",
+        )
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except IOError:
+        font = ImageFont.load_default()
+
+    draw = ImageDraw.Draw(image)
+
+    genre_text = (genre or "").strip()
+    year_text  = ("" if (year is None or not show_year) else str(year)).strip()
+    sash_text  = (sash_label or "").strip()
+
+    # Build the segments that come before the sash (genre + optional year),
+    # joined with the regular dot.  The sash text is appended separately so
+    # its preceding separator can switch to "★" for winners — see docstring.
+    pre_sash_parts = [s for s in (genre_text, year_text) if s]
+    pre_sash       = " · ".join(pre_sash_parts)
+
+    if sash_text:
+        sash_sep = " ★ " if sash_type == "win" else " · "
+        line     = pre_sash + sash_sep + sash_text if pre_sash else sash_text
+    else:
+        line = pre_sash
+
+    if not line:
+        return
+
+    bb       = draw.textbbox((0, 0), line, font=font)
+    line_w   = bb[2] - bb[0]
+    x        = max(0, (W - line_w) // 2)
+    y        = round(H * y_offset)
+    color    = _compact_palette_color(score, score_color_mode)
+
+    draw.text((x, y), line, font=font, fill=(*color, 255))
 
 
 # ---------------------------------------------------------------------------

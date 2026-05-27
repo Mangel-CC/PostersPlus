@@ -1439,7 +1439,7 @@ def draw_award_badge(
     font_size     = int(min(base_size, adjusted_size)) * SS
     _fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
     try:
-        font = ImageFont.truetype(os.path.join(_fonts_dir, "Ubuntu-Bold.ttf"), font_size)
+        font = ImageFont.truetype(os.path.join(_fonts_dir, "Inter-Bold.ttf"), font_size)
     except IOError:
         font = ImageFont.load_default()
 
@@ -1521,7 +1521,7 @@ def draw_award_sash(
     font_size     = int(min(base_size, adjusted_size)) * SS
 
     try:
-        font = ImageFont.truetype(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Ubuntu-Bold.ttf"), font_size)
+        font = ImageFont.truetype(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Inter-Bold.ttf"), font_size)
     except IOError:
         font = ImageFont.load_default()
 

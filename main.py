@@ -215,7 +215,7 @@ from quality import (
     parse_quality,
     render_badges_left,
 )
-from ratings import calculate_weighted_score, draw_score_bar, fetch_rating, draw_score_bar_vertical
+from ratings import calculate_weighted_score, draw_score_bar, fetch_rating, draw_score_bar_vertical, draw_compact_label
 from tmdb import composite_logo, fetch_logo, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank
 
 # ---------------------------------------------------------------------------
@@ -305,6 +305,8 @@ class RequestConfig:
     rating_display_mode: int  = field(default_factory=lambda: _cfg.SHOW_RATING_DISPLAY_MODE)
 
     accent_bar_font_size_ratio:    float = field(default_factory=lambda: _cfg.ACCENT_BAR_MODE_FONT_SIZE_RATIO)
+    # Score Bar mode label suffix: 0 = Year (legacy default), 1 = Info sash, 2 = Year + Info sash
+    accent_bar_append_mode:        int   = 0
     numeric_score_font_size_ratio: float = field(default_factory=lambda: _cfg.NUMERIC_SCORE_MODE_FONT_SIZE_RATIO)
     accent_bar_y_offset:           float = field(default_factory=lambda: _cfg.ACCENT_BAR_MODE_FONT_Y_OFFSET)
     numeric_score_y_offset:        float = field(default_factory=lambda: _cfg.NUMERIC_SCORE_MODE_FONT_Y_OFFSET)
@@ -314,6 +316,14 @@ class RequestConfig:
     minimalist_mode_font_size_ratio:  float = field(default_factory=lambda: _cfg.MINIMALIST_MODE_FONT_SIZE_RATIO)
     minimalist_mode_font_x_offset: float = field(default_factory=lambda: _cfg.MINIMALIST_MODE_FONT_X_OFFSET)
     minimalist_mode_font_y_offset: float = field(default_factory=lambda: _cfg.MINIMALIST_MODE_FONT_Y_OFFSET)
+
+    # Compact mode (rating_display_mode == 4) — "all info in one strip"
+    # Year is OFF by default; the smaller line lets the font run a bit larger
+    # (~0.066 vs Minimalist's 0.055).  Flip show_year on if you'd rather
+    # include the year — you'll likely want to drop the font ratio back to ~0.055.
+    compact_font_size_ratio: float = 0.066
+    compact_y_offset:        float = 0.90
+    compact_show_year:       bool  = False
 
     logo_max_w_ratio:  float = field(default_factory=lambda: _cfg.LOGO_MAX_W_RATIO)
     logo_max_h_ratio:  float = field(default_factory=lambda: _cfg.LOGO_MAX_H_RATIO)
@@ -427,7 +437,7 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.sash_badge_y            = _f("sash_badge_y",           cfg.sash_badge_y,           0.0, 1.0)
     cfg.score_color_mode        = _i("score_color_mode",       cfg.score_color_mode,       0,   2)
     cfg.badge_display_mode      = _i("badge_display_mode",     cfg.badge_display_mode,     0,   4)
-    cfg.rating_display_mode     = _i("rating_display_mode",    cfg.rating_display_mode,    0,   3)
+    cfg.rating_display_mode     = _i("rating_display_mode",    cfg.rating_display_mode,    0,   4)
 
     if "show_quality_badges" in params and "badge_display_mode" not in params:
         if _parse_bool(params.get("show_quality_badges"), True):
@@ -438,6 +448,7 @@ def build_request_config(params: dict) -> RequestConfig:
     # Font-size ratios are multiplied by the poster width — anything above ~0.3
     # would overflow the poster; we cap at 0.5 to leave headroom for experimentation.
     cfg.accent_bar_font_size_ratio    = _f("accent_bar_font_size_ratio",    cfg.accent_bar_font_size_ratio,    0.0, 0.5)
+    cfg.accent_bar_append_mode        = _i("accent_bar_append_mode",        cfg.accent_bar_append_mode,        0,   2)
     cfg.numeric_score_font_size_ratio = _f("numeric_score_font_size_ratio", cfg.numeric_score_font_size_ratio, 0.0, 0.5)
     cfg.accent_bar_y_offset           = _f("accent_bar_y_offset",           cfg.accent_bar_y_offset,           0.0, 1.0)
     cfg.numeric_score_y_offset        = _f("numeric_score_y_offset",        cfg.numeric_score_y_offset,        0.0, 1.0)
@@ -449,6 +460,10 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.minimalist_mode_font_size_ratio = _f("minimalist_mode_font_size_ratio", cfg.minimalist_mode_font_size_ratio, 0.0, 0.5)
     cfg.minimalist_mode_font_x_offset = _f("minimalist_mode_font_x_offset", cfg.minimalist_mode_font_x_offset, 0.0, 1.0)
     cfg.minimalist_mode_font_y_offset = _f("minimalist_mode_font_y_offset", cfg.minimalist_mode_font_y_offset, 0.0, 1.0)
+
+    cfg.compact_font_size_ratio = _f("compact_font_size_ratio", cfg.compact_font_size_ratio, 0.0, 0.5)
+    cfg.compact_y_offset        = _f("compact_y_offset",        cfg.compact_y_offset,        0.0, 1.0)
+    cfg.compact_show_year       = _b("compact_show_year",       cfg.compact_show_year)
 
     cfg.logo_max_w_ratio  = _f("logo_max_w_ratio",  cfg.logo_max_w_ratio,  0.0, 1.5)
     cfg.logo_max_h_ratio  = _f("logo_max_h_ratio",  cfg.logo_max_h_ratio,  0.0, 1.0)
@@ -629,7 +644,9 @@ def build_poster(
     # lighter fade is enough to keep contrast without over-darkening the poster.
     bottom_height = int(height * 0.5)
     bottom_start = height - bottom_height
-    bottom_max_alpha = 225 if cfg.rating_display_mode == 3 else 255
+    # Minimalist (3) and Compact (4) both use a small bottom-line label, so a
+    # lighter fade leaves more of the art visible while still keeping contrast.
+    bottom_max_alpha = 225 if cfg.rating_display_mode in (3, 4) else 245
     bottom_curve = 1.2
     t_bot = np.linspace(0, 1, bottom_height, dtype=np.float32)
     eased_bot = ((1 - (1 - t_bot) ** bottom_curve) * bottom_max_alpha).astype(np.uint8)
@@ -742,12 +759,46 @@ def build_poster(
             wm_y    = ty + (wm_bb[3] - wm_bb[1]) + int(font_size * 1.4)  # type: ignore
             draw.text((wm_x, wm_y), wm_text, font=wm_font, fill=(160, 160, 160, 110))
 
+    # Resolve the info-sash pick once, regardless of whether the diagonal sash
+    # itself is rendered.  Compact rating mode (4) also reads from this to
+    # populate the bottom-line slot with the sash label + colour.
+    sash_result = (
+        pick_sash(discovery_meta, cfg.sash_priority)
+        if discovery_meta is not None
+        else None
+    )
+
     # --- Rating / genre label ---
     if cfg.rating_display_mode != 0:
 
         if cfg.rating_display_mode == 1:
             font_size = int(width * cfg.accent_bar_font_size_ratio)
-            label = f"{genre} · {release_year}" if release_year else genre
+            # Label suffix is configurable: append year, append sash text, or
+            # append both joined by " · ".  Missing data degrades gracefully —
+            # if "sash" is requested but no sash triggered, we just show the
+            # genre; if "both" but only one is present, we show whichever did.
+            #
+            # The separator immediately before the sash text becomes "★" when
+            # the sash is a winner (sash_type == "win") rather than "·".  Same
+            # disambiguation trick used by Compact mode — Best Picture /
+            # Golden Globe / festival wins and nominees share their label
+            # text, so without this they'd be indistinguishable here.
+            _append_year = cfg.accent_bar_append_mode in (0, 2)
+            _append_sash = cfg.accent_bar_append_mode in (1, 2)
+            _sash_text_for_label, _sash_type_for_label = (
+                sash_result if (_append_sash and sash_result) else (None, None)
+            )
+
+            _pre_sash = [genre]
+            if _append_year and release_year:
+                _pre_sash.append(str(release_year))
+            _label_main = " · ".join(_pre_sash)
+
+            if _sash_text_for_label:
+                _sash_sep = " ★ " if _sash_type_for_label == "win" else " · "
+                label = _label_main + _sash_sep + _sash_text_for_label
+            else:
+                label = _label_main
             rating_cy = height * cfg.accent_bar_y_offset
 
             try:
@@ -792,7 +843,7 @@ def build_poster(
             font_size = int(width * cfg.minimalist_mode_font_size_ratio)
 
             try:
-                font_meta = ImageFont.truetype(os.path.join(_FONTS_DIR, "Ubuntu-Bold.ttf"), font_size)
+                font_meta = ImageFont.truetype(os.path.join(_FONTS_DIR, "Inter-Bold.ttf"), font_size)
             except IOError:
                 font_meta = ImageFont.load_default()
 
@@ -836,16 +887,37 @@ def build_poster(
                     color_mode=cfg.score_color_mode,
                 )
 
+        elif cfg.rating_display_mode == 4:
+            # Compact — Genre · Year · Sash text, centred.  Reads the sash
+            # pick from the hoisted sash_result above so the sash-text
+            # segment still appears even when the diagonal sash itself is
+            # hidden (compact is purely additive).  sash_type is passed in
+            # so the renderer can switch the preceding separator from "·"
+            # to "★" for winners — see draw_compact_label docstring.
+            _sash_label, _sash_type = (
+                sash_result if sash_result else (None, None)
+            )
+            draw_compact_label(
+                image,
+                genre=genre,
+                year=release_year,
+                score=score,
+                sash_label=_sash_label,
+                sash_type=_sash_type,
+                font_size_ratio=cfg.compact_font_size_ratio,
+                y_offset=cfg.compact_y_offset,
+                score_color_mode=cfg.score_color_mode,
+                show_year=cfg.compact_show_year,
+            )
+
     # --- Discovery sash / badge ---
-    if cfg.show_award_sash and discovery_meta is not None:
-        sash_result = pick_sash(discovery_meta, cfg.sash_priority)
-        if sash_result is not None:
-            label, sash_type = sash_result
-            if cfg.sash_badge:
-                image = draw_award_badge(image, label, sash_type=sash_type,
-                                         x_ratio=cfg.sash_badge_x, y_ratio=cfg.sash_badge_y)
-            else:
-                image = draw_award_sash(image, label, sash_type=sash_type, muted=cfg.muted)
+    if cfg.show_award_sash and sash_result is not None:
+        label, sash_type = sash_result
+        if cfg.sash_badge:
+            image = draw_award_badge(image, label, sash_type=sash_type,
+                                     x_ratio=cfg.sash_badge_x, y_ratio=cfg.sash_badge_y)
+        else:
+            image = draw_award_sash(image, label, sash_type=sash_type, muted=cfg.muted)
 
     return image
 
