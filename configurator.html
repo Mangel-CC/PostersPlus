@@ -758,6 +758,16 @@
     color: var(--gold);
     min-width: 36px;
     text-align: right;
+    cursor: text;
+    border-radius: 3px;
+    transition: outline 0.1s;
+    outline: 1px solid transparent;
+  }
+  .range-val[contenteditable="true"] {
+    outline: 1px solid var(--gold);
+    padding: 0 3px;
+    cursor: text;
+    color: #fff;
   }
 
   /* ── WEIGHTS ── */
@@ -2107,6 +2117,83 @@ function updateWeightRange(el, outId) {
   el.style.setProperty('--pct', (v * 100).toFixed(1) + '%');
 }
 
+// ---------------------------------------------------------------------------
+// Editable range-val spans
+// ---------------------------------------------------------------------------
+// Clicking the numeric label next to any slider opens it for direct text
+// input.  Enter / blur commits the value (clamped to slider min/max and
+// snapped to step); Escape restores the current slider value.
+// Weight sliders (id starts with "rv-") display percentages and store 0–1
+// internally, so their input is parsed and written back accordingly.
+function _initRangeValEditing() {
+  document.querySelectorAll('.range-val').forEach(span => {
+    const slider = span.previousElementSibling;
+    if (!slider || slider.type !== 'range') return;
+
+    const isWeight = span.id.startsWith('rv-');
+
+    span.title = 'Click to type a value';
+
+    span.addEventListener('click', () => {
+      span.setAttribute('contenteditable', 'true');
+      span.focus();
+      const sel = window.getSelection();
+      const r = document.createRange();
+      r.selectNodeContents(span);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    });
+
+    // Prevent newlines on Enter (commit instead), and strip HTML on paste.
+    span.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); span.blur(); }
+      if (e.key === 'Escape') {
+        span.removeAttribute('contenteditable');
+        // Restore display from current slider value.
+        if (isWeight) updateWeightRange(slider, span.id);
+        else          updateRange(slider, span.id);
+      }
+    });
+    span.addEventListener('paste', e => {
+      e.preventDefault();
+      const txt = (e.clipboardData || window.clipboardData).getData('text/plain');
+      document.execCommand('insertText', false, txt.replace(/\s/g, ''));
+    });
+
+    span.addEventListener('blur', () => {
+      span.removeAttribute('contenteditable');
+
+      const min  = parseFloat(slider.min);
+      const max  = parseFloat(slider.max);
+      const step = parseFloat(slider.step) || 1;
+
+      // Strip '%' suffix for weight spans; parse whatever remains.
+      const raw = parseFloat(span.textContent.replace('%', '').trim());
+      if (isNaN(raw)) {
+        // Bad input — just restore.
+        if (isWeight) updateWeightRange(slider, span.id);
+        else          updateRange(slider, span.id);
+        return;
+      }
+
+      // Weight spans: user types a percentage (e.g. 75 or 75%) → 0.75.
+      const sliderVal = isWeight ? raw / 100 : raw;
+
+      // Clamp to [min, max], then snap to nearest step.
+      const clamped = Math.min(max, Math.max(min, sliderVal));
+      const snapped = Math.round((clamped - min) / step) * step + min;
+      const final   = parseFloat(Math.min(max, Math.max(min, snapped)).toFixed(10));
+
+      slider.value = final;
+      if (isWeight) updateWeightRange(slider, span.id);
+      else          updateRange(slider, span.id);
+
+      build();
+      queuePreviewReload();
+    });
+  });
+}
+
 async function fetchServerCaps() {
   try {
     const ak = vEl('cfg-access-key');
@@ -3180,6 +3267,7 @@ if (!localStorage.getItem('postersplus_selection')) applyDefaultSelection();
 updateRatingFields();
 updateBadgeModeHint();
 updateSashBadgeFields();
+_initRangeValEditing();
 checkWhatsNew();
 build();
 

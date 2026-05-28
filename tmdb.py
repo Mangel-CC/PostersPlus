@@ -261,16 +261,87 @@ async def fetch_poster_image(
     return image
 
 
+def _saliency_crop_left(image: Image.Image, crop_w: int) -> int:
+    """
+    Find the best left-edge x-coordinate for a portrait crop of a landscape image.
+
+    Uses a gradient-magnitude saliency map to locate the most visually active
+    horizontal strip, with a mild Gaussian centre bias so low-contrast or
+    near-uniform frames still land close to centre rather than snapping to an
+    arbitrary edge.
+
+    Algorithm:
+      1. Downsample to ≤320 px wide (speed — saliency is scale-invariant).
+      2. Convert to greyscale and compute L1 gradient magnitude (|∂x| + |∂y|).
+      3. Collapse the gradient map to a 1-D per-column saliency profile.
+      4. Slide a window of width crop_w across the profile and find the peak.
+      5. Add a Gaussian centre bias (≈20 % of peak saliency) as a tiebreaker
+         so the crop never drifts far from centre when the scene is uniform.
+      6. Scale the winning position back to full resolution and clamp.
+    """
+    w, h = image.size
+    if crop_w >= w:
+        return 0  # already fits — no crop needed
+
+    # --- Downsample for speed ------------------------------------------------
+    SMALL_W = 320
+    scale   = min(1.0, SMALL_W / w)
+    sw      = max(1, int(w * scale))
+    sh      = max(1, int(h * scale))
+    scrop_w = max(1, int(crop_w * scale))
+
+    grey = np.array(
+        image.resize((sw, sh), Image.LANCZOS).convert("L"),
+        dtype=np.float32,
+    )
+
+    # --- Gradient magnitude --------------------------------------------------
+    # Simple finite differences — fast and sufficient for saliency.
+    gx = np.abs(np.diff(grey, axis=1, prepend=grey[:, :1]))
+    gy = np.abs(np.diff(grey, axis=0, prepend=grey[:1, :]))
+    grad = gx + gy   # H × W, L1 gradient magnitude
+
+    # --- Per-column saliency profile -----------------------------------------
+    col_sal = grad.sum(axis=0)   # shape (sw,)
+
+    # --- Sliding-window via cumulative sum (O(n)) ----------------------------
+    cum          = np.concatenate([[0.0], col_sal.cumsum()])
+    n_positions  = sw - scrop_w + 1
+    if n_positions <= 1:
+        return 0
+
+    window_scores = cum[scrop_w:scrop_w + n_positions] - cum[:n_positions]
+
+    # --- Gaussian centre bias ------------------------------------------------
+    # Peaks at the natural centre crop position; amplitude ≈ 20 % of the max
+    # window score so it acts as a tiebreaker without overriding strong signal.
+    centre  = (n_positions - 1) / 2.0
+    sigma   = n_positions * 0.35          # wide bell — gentle nudge
+    xs      = np.arange(n_positions, dtype=np.float32)
+    bias    = np.exp(-0.5 * ((xs - centre) / sigma) ** 2)
+    sal_max = window_scores.max()
+    if sal_max > 0:
+        bias *= sal_max * 0.20
+
+    best_small_left = int((window_scores + bias).argmax())
+
+    # --- Scale back and clamp ------------------------------------------------
+    left = int(round(best_small_left / scale))
+    return max(0, min(w - crop_w, left))
+
+
 async def fetch_backdrop_image(
     client: httpx.AsyncClient,
     tmdb_id: str,
     backdrop_path: str,
 ) -> Image.Image:
     """
-    Fetch, centre-crop, and cache a TMDB backdrop as a portrait poster.
+    Fetch, saliency-crop, and cache a TMDB backdrop as a portrait poster.
 
-    Backdrops are 16:9 landscape; we take the full height and cut a centred
-    2:3 strip, giving a clean textless portrait without any AI inpainting.
+    Backdrops are 16:9 landscape; we take the full height and cut a 2:3 strip
+    whose horizontal position is chosen by gradient-magnitude saliency rather
+    than always defaulting to the centre.  This keeps the main subject in frame
+    when cinematographers frame wide shots off-centre.
     Cached under the same JPEG scheme as regular posters.
     """
     cache_key = f"backdrop_{tmdb_id}_{backdrop_path.strip('/')}"
@@ -289,11 +360,15 @@ async def fetch_backdrop_image(
     img_resp.raise_for_status()
     image = Image.open(io.BytesIO(img_resp.content)).convert("RGBA")
 
-    # Centre-crop 16:9 → 2:3: keep full height, take a centred vertical strip
-    w, h = image.size
+    # Saliency-aware crop: keep full height, cut the most active 2:3 strip.
+    w, h   = image.size
     crop_w = int(h * 2 / 3)
     if crop_w < w:
-        left = (w - crop_w) // 2
+        left = _saliency_crop_left(image, crop_w)
+        logger.info(
+            f"Backdrop saliency crop for {tmdb_id}: "
+            f"left={left} (centre would be {(w - crop_w) // 2}) of w={w}"
+        )
         image = image.crop((left, 0, left + crop_w, h))
 
     image = normalise_poster(image)
