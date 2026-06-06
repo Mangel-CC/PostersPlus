@@ -207,7 +207,7 @@ async def _background_quality_fetch(
 
 # Local imports
 from age_badge import draw_quality_age_badge, draw_tier_bar
-from awards import sample_frosted_notch_rgb
+from awards import sample_frosted_notch_rgb, sample_frosted_sash_rgb
 from ratings import sample_frosted_bar_rgb
 from awards import FETCH_FAILED, _RateLimited, draw_award_badge, draw_award_sash, parse_mdblist_awards, _STAR_WIN_AWARDS
 from i18n import load_languages, translate_genre, translate_sash
@@ -345,6 +345,7 @@ class RequestConfig:
     Defaults come from the global config module; query params override them.
     """
     show_award_sash:     bool = field(default_factory=lambda: _cfg.SHOW_AWARD_SASH)
+    sash_poster_color:   bool = False   # diagonal sash colour derived from poster art
     cinema_greyscale:    bool = True    # greyscale art when release_status == "Cinema"
     cinema_greyscale_skip_if_available: bool = False  # keep colour if Web/Remux source found
     release_status_cinema_only: bool = True   # only show release status when "Cinema"
@@ -425,7 +426,8 @@ class RequestConfig:
     score_color_mode: int = 2
     top_gradient:    str = "high"   # off | low | medium | high — strength of the top vignette
     bottom_gradient: str = "high"   # off | low | medium | high — strength of the bottom vignette
-    sash_badge: bool = False              # True → centred notch badge instead of diagonal sash
+    sash_badge: bool = False              # legacy; superseded by sash_mode (kept for back-compat parsing)
+    sash_mode: str = "sash"               # "sash" (diagonal) | "notch"
     sash_badge_style:  str   = "frosted" # "silver" | "gold" | "frosted"
     sash_badge_size_w: float = 1.05      # horizontal scale of badge
     sash_badge_size_h: float = 1.05      # vertical scale of badge
@@ -509,6 +511,7 @@ def build_request_config(params: dict) -> RequestConfig:
             return default
 
     cfg.show_award_sash         = _b("show_award_sash",        cfg.show_award_sash)
+    cfg.sash_poster_color       = _b("sash_poster_color",      cfg.sash_poster_color)
     cfg.cinema_greyscale        = _b("cinema_greyscale",       cfg.cinema_greyscale)
     cfg.cinema_greyscale_skip_if_available = _b("cinema_greyscale_skip_if_available", cfg.cinema_greyscale_skip_if_available)
     cfg.release_status_cinema_only = _b("release_status_cinema_only", cfg.release_status_cinema_only)
@@ -534,6 +537,15 @@ def build_request_config(params: dict) -> RequestConfig:
     if _bg_raw in _BOTTOM_GRADIENT_LEVELS:
         cfg.bottom_gradient = _bg_raw
     cfg.sash_badge              = _b("sash_badge",              cfg.sash_badge)
+    # sash_mode supersedes the legacy sash_badge bool; fall back to it for old
+    # URLs/presets (sash_badge=true → notch, false → diagonal sash).
+    _sm_raw = (params.get("sash_mode") or "").strip().lower()
+    if _sm_raw in ("hidden", "sash", "notch"):
+        cfg.sash_mode = _sm_raw
+    elif "show_award_sash" in params and not cfg.show_award_sash:
+        cfg.sash_mode = "hidden"   # legacy: sashes turned off
+    elif "sash_badge" in params:
+        cfg.sash_mode = "notch" if cfg.sash_badge else "sash"
     cfg.sash_badge_notch_offset  = _f("sash_badge_notch_offset",  cfg.sash_badge_notch_offset,  -0.5, 0.5)
     cfg.sash_badge_inset         = _f("sash_badge_inset",         cfg.sash_badge_inset,         -0.02, 0.02)
     cfg.sash_badge_font_ratio    = _f("sash_badge_font_ratio",    cfg.sash_badge_font_ratio,    0.10, 1.0)
@@ -1037,31 +1049,34 @@ def build_poster(
     )
 
     # --- Shared frosted tint (Match Notch Colour) ---------------------------
-    # When the frosted rating bar (mode 4) and a frosted sash notch are BOTH on
-    # and bar_match_notch is set, sample each region now (before either is drawn)
-    # and force both to the more saturated of the two colours so they match.
+    # When the frosted rating bar (mode 4) and a poster-coloured sash element are
+    # both on (a frosted notch badge OR a poster-coloured diagonal sash) and
+    # bar_match_notch is set, sample each region now (before either is drawn) and
+    # force both to the more saturated of the two colours so they match.
     _shared_tint: tuple[float, float, float] | None = None
-    _notch_active = (
-        cfg.show_award_sash and sash_result is not None
-        and cfg.sash_badge and cfg.sash_badge_style == "frosted"
-    )
+    _sash_shown    = cfg.sash_mode != "hidden" and sash_result is not None
+    _notch_frosted = _sash_shown and cfg.sash_mode == "notch" and cfg.sash_badge_style == "frosted"
+    _sash_poster   = _sash_shown and cfg.sash_mode == "sash" and cfg.sash_poster_color
     if (
         cfg.bar_match_notch
         and cfg.rating_display_mode == 4
         and cfg.bar_style in ("frosted", "rating_frosted")
-        and _notch_active
+        and (_notch_frosted or _sash_poster)
     ):
-        _bar_rgb   = sample_frosted_bar_rgb(image, cfg.bar_height_ratio, cfg.bar_bottom_inset)
-        _notch_rgb = sample_frosted_notch_rgb(
-            image, translate_sash(sash_result[0], cfg.logo_language), sash_type=sash_result[1],
-            size_ratio_w=cfg.sash_badge_size_w, size_ratio_h=cfg.sash_badge_size_h,
-            font_size_ratio=cfg.sash_badge_font_ratio, notch_inset=cfg.sash_badge_inset,
-            star=(sash_result[1] == "win" and sash_result[0] in _STAR_WIN_AWARDS),
-        )
+        _bar_rgb = sample_frosted_bar_rgb(image, cfg.bar_height_ratio, cfg.bar_bottom_inset)
+        if _notch_frosted:
+            _sash_rgb = sample_frosted_notch_rgb(
+                image, translate_sash(sash_result[0], cfg.logo_language), sash_type=sash_result[1],
+                size_ratio_w=cfg.sash_badge_size_w, size_ratio_h=cfg.sash_badge_size_h,
+                font_size_ratio=cfg.sash_badge_font_ratio, notch_inset=cfg.sash_badge_inset,
+                star=(sash_result[1] == "win" and sash_result[0] in _STAR_WIN_AWARDS),
+            )
+        else:
+            _sash_rgb = sample_frosted_sash_rgb(image)
         def _sat(rgb: tuple[float, float, float]) -> float:
             import colorsys
             return colorsys.rgb_to_hsv(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)[1]
-        _shared_tint = _bar_rgb if _sat(_bar_rgb) >= _sat(_notch_rgb) else _notch_rgb
+        _shared_tint = _bar_rgb if _sat(_bar_rgb) >= _sat(_sash_rgb) else _sash_rgb
 
     # --- Rating / genre label ---
     if cfg.rating_display_mode != 0:
@@ -1261,14 +1276,14 @@ def build_poster(
             )
 
     # --- Discovery sash / badge ---
-    if cfg.show_award_sash and sash_result is not None:
+    if cfg.sash_mode != "hidden" and sash_result is not None:
         label, sash_type = sash_result
         # Decide the ★ winner marker on the CANONICAL English label, then render
         # the translated label.  (The renderers' own English set-match would miss
         # a translated label and drop the star.)
         _is_star  = sash_type == "win" and label in _STAR_WIN_AWARDS
         _label_tr = translate_sash(label, cfg.logo_language)
-        if cfg.sash_badge:
+        if cfg.sash_mode == "notch":
             image = draw_award_badge(image, _label_tr, sash_type=sash_type,
                                      size_ratio_w=cfg.sash_badge_size_w,
                                      size_ratio_h=cfg.sash_badge_size_h,
@@ -1279,10 +1294,14 @@ def build_poster(
                                      frost_opacity=cfg.sash_badge_frost_opacity,
                                      tint_rgb=_shared_tint,
                                      star=_is_star)
-        else:
+        else:  # "sash" — diagonal
+            _poster_color = None
+            if cfg.sash_poster_color:
+                _poster_color = _shared_tint or sample_frosted_sash_rgb(image)
             image = draw_award_sash(image, _label_tr, sash_type=sash_type, muted=cfg.muted,
                                     length_ratio=cfg.sash_length_ratio,
-                                    height_ratio=cfg.sash_height_ratio)
+                                    height_ratio=cfg.sash_height_ratio,
+                                    poster_color=_poster_color)
 
     return image
 

@@ -713,6 +713,11 @@
 
   .toggle-row:last-child { border-bottom: none; padding-bottom: 0; }
   .toggle-row:first-child { padding-top: 0; }
+  /* #logo-controls is a wrapper, so its first toggle (Textless) sits right under
+     the Original Art separator — give it normal top padding so it isn't flush,
+     and breathing room for the slider group that follows it. */
+  #logo-controls > .toggle-row:first-child { padding-top: 8px; }
+  #logo-controls .toggle-row + .field { margin-top: 12px; }
   /* Separator whenever the input type changes between adjacent stacked rows
      (dropdown ↔ slider ↔ text ↔ toggle).  margin-top lifts the divider off the
      preceding field's own border so it reads as a separator, not a merge. */
@@ -722,6 +727,17 @@
     margin-top: 12px;
     padding-top: 14px;
   }
+  /* Explicit separator for spots the adjacency rule can't reach (same-type
+     dropdowns, or rows nested in a wrapper div).  !important so it wins over the
+     same-type "no divider" rule which has higher specificity. */
+  .cfg-sep {
+    border-top: 1px solid var(--border) !important;
+    margin-top: 12px !important;
+    padding-top: 14px !important;
+  }
+  /* A separated toggle centres its content, so match bottom padding to the top
+     so it sits evenly between its separator and its own bottom border. */
+  .toggle-row.cfg-sep { padding-bottom: 14px !important; }
   /* A toggle centres its label/switch with align-items, so match the bottom
      padding to the top so the content stays centred between this separator and
      the row's own bottom border (otherwise it sits high). */
@@ -1698,7 +1714,7 @@
               </select>
               <div class="field-hint"><a href="#" onclick="openFallbackGallery(); return false;">Displayed if no poster can be found.</a>.</div>
             </div>
-            <div class="field" style="margin-top:6px;">
+            <div class="field cfg-sep">
               <label class="field-label">Top Vignette</label>
               <select id="cfg-top-gradient" onchange="build(); queuePreviewReload()">
                 <option value="off">Off</option>
@@ -1782,7 +1798,7 @@
               </div>
             </div>
             <div id="rating-mode2-fields" style="display:none;">
-              <div class="toggle-row">
+              <div class="toggle-row cfg-sep">
                 <div>
                   <div class="toggle-label">Display score out of 10</div>
                 </div>
@@ -1952,7 +1968,7 @@
             <span class="section-chevron">▼</span>
           </div>
           <div class="section-body">
-            <div class="toggle-row" style="margin-bottom:14px;">
+            <div class="toggle-row">
               <div>
                 <div class="toggle-label">Original Art</div>
                 <div class="field-hint">Use original poster art rather than textless with logo overlay. I highly suggest bar or minimal rating modes.</div>
@@ -1963,17 +1979,17 @@
               </label>
             </div>
             <!-- Original Art source (shown only in Original Art mode) -->
-            <div class="field" id="original-art-source-field" style="display:none;">
+            <div class="field" id="original-art-source-field" style="display:none; margin-top:12px;">
               <label class="field-label">Art Source</label>
               <select id="cfg-original-art-source" onchange="build(); queuePreviewReload()">
                 <option value="primary" selected>Primary (TMDB default)</option>
-                <option value="top_rated">Top-rated (by language)</option>
+                <option value="top_rated">Top-rated</option>
               </select>
-              <div class="field-hint">Primary is TMDB's main poster; Top-rated picks the highest-voted poster following your language order (set by Logo Priority).</div>
+              <div class="field-hint">Primary is TMDB's main poster, while top-rated picks the highest-voted poster by users.</div>
             </div>
             <!-- Logo overlay controls — N/A in Original Art mode (no logo drawn) -->
             <div id="logo-controls">
-            <div class="toggle-row" style="margin-bottom:14px;">
+            <div class="toggle-row">
               <div>
                 <div class="toggle-label">Textless</div>
               </div>
@@ -2015,14 +2031,22 @@
             <span class="section-chevron">▼</span>
           </div>
           <div class="section-body">
-            <div class="toggle-row">
-              <div>
-                <div class="toggle-label">Show Informational Sashes</div>
-              </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="tog-award-sash" checked onchange="build(); queuePreviewReload()">
-                <div class="toggle-track"><div class="toggle-thumb"></div></div>
-              </label>
+            <div class="field">
+              <label class="field-label">Info Sash Mode</label>
+              <select id="cfg-sash-mode" onchange="onSashModeChange()">
+                <option value="hidden">Hidden</option>
+                <option value="sash" selected>Diagonal Sash</option>
+                <option value="notch">Notch</option>
+              </select>
+            </div>
+            <div class="field" id="sash-style-field" style="display:none;">
+              <label class="field-label">Style</label>
+              <select id="cfg-sash-badge-style" onchange="updateBadgeStyleFields(); build(); queuePreviewReload()">
+                <option value="frosted" selected>Frosted</option>
+                <option value="black">Pure Black</option>
+                <option value="silver">Black, Silver Trim</option>
+                <option value="gold">Black, Gold Trim</option>
+              </select>
             </div>
             <div class="toggle-row">
               <div>
@@ -2030,21 +2054,11 @@
                 <div class="field-hint">Applies to "cinema" and "production." Requires the Release Status sash to be enabled.</div>
               </div>
               <label class="toggle-switch">
-                <input type="checkbox" id="tog-cinema-greyscale" checked onchange="updateCinemaGreyscaleRows(); build(); queuePreviewReload()">
+                <input type="checkbox" id="tog-cinema-greyscale" checked onchange="build(); queuePreviewReload()">
                 <div class="toggle-track"><div class="toggle-thumb"></div></div>
               </label>
             </div>
-            <div class="toggle-row" id="cinema-greyscale-skip-row" style="display:none;">
-              <div>
-                <div class="toggle-label">Keep Colour if Source Found</div>
-                <div class="field-hint">Quality badges must be enabled, trigger is a valid webDL or remux response.</div>
-              </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="tog-cinema-greyscale-skip" onchange="build(); queuePreviewReload()">
-                <div class="toggle-track"><div class="toggle-thumb"></div></div>
-              </label>
-            </div>
-            <div class="toggle-row">
+            <div class="toggle-row" id="sash-release-cinema-only-row">
               <div>
                 <div class="toggle-label">Release Status: Unavailable Only</div>
                 <div class="field-hint">Only show the release status sash when a title is in cinemas or in production.</div>
@@ -2064,28 +2078,19 @@
                 <div class="toggle-track"><div class="toggle-thumb"></div></div>
               </label>
             </div>
-            <div class="toggle-row" style="margin-bottom:14px;">
+            <div class="toggle-row" id="sash-poster-color-row">
               <div>
-                <div class="toggle-label">Notch Badge</div>
-                <div class="field-hint">Replace sash with a notch, adjust inset to suit your client.</div>
+                <div class="toggle-label">Sash Colour from Poster</div>
+                <div class="field-hint">Tints the sash from the poster art instead of the category colour.</div>
               </div>
               <label class="toggle-switch">
-                <input type="checkbox" id="tog-sash-badge" onchange="onBadgeToggle()">
+                <input type="checkbox" id="tog-sash-poster-color" onchange="build(); queuePreviewReload()">
                 <div class="toggle-track"><div class="toggle-thumb"></div></div>
               </label>
             </div>
-            <!-- Badge options — only shown when Notch Badge is ON -->
-            <div id="sash-badge-offsets" style="display:none; margin-bottom:14px;">
+            <!-- Notch sizing/offset options — only shown in Notch mode -->
+            <div id="sash-badge-offsets" style="display:none; margin-top:14px;">
               <div class="field">
-                <label class="field-label">Style</label>
-                <select id="cfg-sash-badge-style" onchange="updateBadgeStyleFields(); build(); queuePreviewReload()">
-                  <option value="frosted" selected>Frosted</option>
-                  <option value="black">Pure Black</option>
-                  <option value="silver">Black, Silver Trim</option>
-                  <option value="gold">Black, Gold Trim</option>
-                </select>
-              </div>
-              <div class="field" style="margin-top:10px;">
                 <label class="field-label">Width</label>
                 <div class="range-row">
                   <input type="range" id="cfg-sash-badge-size-w" min="0.50" max="2" step="0.05" value="1.40" oninput="updateRange(this,'rng-sbsw'); build(); queuePreviewReload()">
@@ -2130,7 +2135,7 @@
                 </div>
               </div>
             </div>
-            <div id="sash-size-fields" style="margin-bottom:10px; display:none;">
+            <div id="sash-size-fields" style="margin-top:14px; margin-bottom:10px; display:none;">
               <div class="field">
                 <label class="field-label">Sash Size</label>
                 <div class="range-row">
@@ -2179,17 +2184,17 @@
               </div>
 
               <!-- Wait for quality toggle (shown when quality badges are enabled) -->
-              <div id="wait-quality-field" style="display:none; margin-top:8px;">
-                <div class="toggle-row">
+              <div id="wait-quality-field" style="display:none;">
+                <div class="toggle-row cfg-sep">
                   <div>
                     <div class="toggle-label">Wait for Quality</div>
+                    <div class="field-hint">By default quality is fetched in the background if uncached, this will prevent the poster rendering until it's ready.</div>
                   </div>
                   <label class="toggle-switch">
                     <input type="checkbox" id="tog-wait-quality" onchange="updateWaitQualityRows(); build(); queuePreviewReload()">
                     <div class="toggle-track"><div class="toggle-thumb"></div></div>
                   </label>
                 </div>
-                <div class="field-hint" style="margin-top:4px;">By default quality is fetched in the background if uncached, this will prevent the poster rendering until it's ready.</div>
                 <div class="toggle-row" id="greyscale-noquality-row" style="display:none; margin-top:8px;">
                   <div>
                     <div class="toggle-label">Greyscale if No Quality</div>
@@ -2199,11 +2204,21 @@
                     <div class="toggle-track"><div class="toggle-thumb"></div></div>
                   </label>
                 </div>
-                <div class="field-hint" id="greyscale-noquality-hint" style="display:none; margin-top:4px;">Desaturates the poster when no stream quality is found — a visual "unavailable" cue.</div>
+                <div class="field-hint" id="greyscale-noquality-hint" style="display:none; margin-top:4px;">Desaturates the poster when no stream quality is found.</div>
+              </div>
+              <div class="toggle-row" id="consider-available-field" style="display:none; margin-top:8px;">
+                <div>
+                  <div class="toggle-label">Consider Available if Source Found</div>
+                  <div class="field-hint" style="margin-top:4px;">Overrides the "Greyscale Poster if unavaiable" option in info sash if WebDL or Remux is found in quality.</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="tog-cinema-greyscale-skip" onchange="build(); queuePreviewReload()">
+                  <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                </label>
               </div>
             </div>
             <!-- All layout controls collapse when Display Mode = Hidden (mode 0). -->
-            <div id="badge-layout-fields">
+            <div id="badge-layout-fields" class="cfg-sep">
               <div class="field">
                 <label class="field-label">Badge Size</label>
                 <div class="range-row">
@@ -2654,6 +2669,9 @@ function updateScraperHint() {
     const qualityOk = serverCaps.quality_configured || serverCaps.aiostreams_configured;
     aiosHint.style.display = (serverCapsLoaded && qualityMode && !qualityOk) ? '' : 'none';
   }
+  // "Consider Available if Source Found" needs quality data, so show it with
+  // the quality-mode controls.
+  document.getElementById('consider-available-field').style.display = qualityMode ? '' : 'none';
   updateWaitQualityRows();
 }
 
@@ -2663,13 +2681,6 @@ function updateWaitQualityRows() {
   const on = c('tog-wait-quality');
   document.getElementById('greyscale-noquality-row').style.display = on ? '' : 'none';
   document.getElementById('greyscale-noquality-hint').style.display = on ? '' : 'none';
-}
-
-// The "Keep Colour if Source Found" override only matters when greyscale-if-
-// unavailable is on, so only show it then.
-function updateCinemaGreyscaleRows() {
-  const on = c('tog-cinema-greyscale');
-  document.getElementById('cinema-greyscale-skip-row').style.display = on ? '' : 'none';
 }
 
 function updateBadgeModeHint() {
@@ -3229,7 +3240,8 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
 
   const ratingMode = ni('cfg-rating-mode');
   const badgeMode  = ni('cfg-badge-display-mode');
-  const showSash   = c('tog-award-sash');
+  const sashMode   = vEl('cfg-sash-mode') || 'sash';
+  const showSash   = sashMode !== 'hidden';
 
   const params = new URLSearchParams();
 
@@ -3300,15 +3312,12 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
   params.set('logo_bottom_ratio', n('cfg-logo-bottom').toFixed(2));
 
   // ── Info Sash ──────────────────────────────────────────────────────────────
-  params.set('show_award_sash', showSash ? 'true' : 'false');
+  params.set('sash_mode', sashMode);
   params.set('cinema_greyscale', c('tog-cinema-greyscale') ? 'true' : 'false');
-  if (c('tog-cinema-greyscale')) params.set('cinema_greyscale_skip_if_available', c('tog-cinema-greyscale-skip') ? 'true' : 'false');
+  params.set('cinema_greyscale_skip_if_available', c('tog-cinema-greyscale-skip') ? 'true' : 'false');
   params.set('release_status_cinema_only', c('tog-release-cinema-only') ? 'true' : 'false');
   if (showSash) {
-    const isBadge = c('tog-sash-badge');
-    params.set('sash_badge', isBadge ? 'true' : 'false');
-    if (isBadge) {
-      // Muted is not compatible with badge style — omit it from URL
+    if (sashMode === 'notch') {
       params.set('sash_badge_style',         vEl('cfg-sash-badge-style') || 'silver');
       params.set('sash_badge_size_w',        n('cfg-sash-badge-size-w').toFixed(2));
       params.set('sash_badge_size_h',        n('cfg-sash-badge-size-h').toFixed(2));
@@ -3317,8 +3326,9 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
       params.set('sash_badge_font_ratio',    n('cfg-sash-badge-font-ratio').toFixed(2));
       if (vEl('cfg-sash-badge-style') === 'frosted')
         params.set('sash_badge_frost_opacity', n('cfg-sash-badge-frost-opacity').toFixed(2));
-    } else {
+    } else {  // diagonal sash
       params.set('muted',              c('tog-muted') ? 'true' : 'false');
+      params.set('sash_poster_color',  c('tog-sash-poster-color') ? 'true' : 'false');
       params.set('sash_length_ratio',  n('cfg-sash-length').toFixed(2));
       params.set('sash_height_ratio',  n('cfg-sash-height').toFixed(3));
     }
@@ -3484,14 +3494,21 @@ async function loadPreview() {
 }
 
 function updateSashBadgeFields() {
-  const isBadge = c('tog-sash-badge');
-  document.getElementById('sash-muted-row').style.display     = isBadge ? 'none' : '';
-  document.getElementById('sash-badge-offsets').style.display = isBadge ? '' : 'none';
-  document.getElementById('sash-size-fields').style.display   = isBadge ? 'none' : '';
-  if (isBadge) { initCustomMobileSliders(); updateBadgeStyleFields(); }
+  const mode    = vEl('cfg-sash-mode') || 'sash';
+  const isNotch = mode === 'notch';
+  const isBand  = mode === 'sash';   // category/poster + muted apply to diagonal sash
+  const shown   = mode !== 'hidden';
+  // Release-status-only filter does nothing when no sash is drawn.
+  document.getElementById('sash-release-cinema-only-row').style.display = shown ? '' : 'none';
+  document.getElementById('sash-style-field').style.display      = isNotch ? '' : 'none';
+  document.getElementById('sash-muted-row').style.display        = isBand ? '' : 'none';
+  document.getElementById('sash-poster-color-row').style.display = isBand ? '' : 'none';
+  document.getElementById('sash-badge-offsets').style.display    = isNotch ? '' : 'none';
+  document.getElementById('sash-size-fields').style.display      = isBand ? '' : 'none';
+  if (isNotch) { initCustomMobileSliders(); updateBadgeStyleFields(); }
 }
 
-function onBadgeToggle() {
+function onSashModeChange() {
   updateSashBadgeFields();
   updateBadgeStyleFields();
   build();
@@ -3818,12 +3835,15 @@ function importUrl(urlStr, { silent = false, settingsOnly = false } = {}) {
   }
 
   // ── Sash ────────────────────────────────────────────────────────────────
-  if (p.has('show_award_sash')) _setEl('tog-award-sash',    p.get('show_award_sash'));
-  if (p.has('cinema_greyscale')) { _setEl('tog-cinema-greyscale', p.get('cinema_greyscale')); updateCinemaGreyscaleRows(); }
+  if (p.has('sash_poster_color')) _setEl('tog-sash-poster-color', p.get('sash_poster_color'));
+  if (p.has('cinema_greyscale')) _setEl('tog-cinema-greyscale', p.get('cinema_greyscale'));
   if (p.has('cinema_greyscale_skip_if_available')) _setEl('tog-cinema-greyscale-skip', p.get('cinema_greyscale_skip_if_available'));
   if (p.has('release_status_cinema_only')) _setEl('tog-release-cinema-only', p.get('release_status_cinema_only'));
   if (p.has('muted'))           _setEl('tog-muted',         p.get('muted'));
-  if (p.has('sash_badge'))               _setEl('tog-sash-badge',              p.get('sash_badge'));
+  // sash_mode supersedes the legacy show_award_sash + sash_badge bools.
+  if (p.has('sash_mode'))                _setEl('cfg-sash-mode', p.get('sash_mode'));
+  else if (p.has('show_award_sash') && p.get('show_award_sash') !== 'true') _setEl('cfg-sash-mode', 'hidden');
+  else if (p.has('sash_badge'))          _setEl('cfg-sash-mode', p.get('sash_badge') === 'true' ? 'notch' : 'sash');
   if (p.has('sash_badge_style'))         _setEl('cfg-sash-badge-style',        p.get('sash_badge_style'));
   if (p.has('sash_badge_size_w'))        _setEl('cfg-sash-badge-size-w',       p.get('sash_badge_size_w'));
   if (p.has('sash_badge_size_h'))        _setEl('cfg-sash-badge-size-h',       p.get('sash_badge_size_h'));
@@ -4006,7 +4026,6 @@ updateRatingFields();
 updateOriginalArt();
 updateBadgeModeHint();
 updateSashBadgeFields();
-updateCinemaGreyscaleRows();
 _initRangeValEditing();
 checkWhatsNew();
 showTab('core');   // start on the Core Config category

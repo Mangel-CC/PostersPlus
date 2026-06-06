@@ -1638,6 +1638,25 @@ def draw_award_badge(
     return result
 
 
+def _frosted_tint(dr: float, dg: float, db: float) -> tuple[int, int, int]:
+    """Poster dominant RGB → the same boosted/whitened tint the frosted notch
+    uses, so the sash / notch / bar all derive a consistent colour."""
+    import colorsys
+    h, s, v = colorsys.rgb_to_hsv(dr / 255, dg / 255, db / 255)
+    tr, tg, tb = colorsys.hsv_to_rgb(h, min(1.0, s * 1.2), v * 0.4 + 0.60)
+    return (int(tr*255*0.6 + 255*0.4), int(tg*255*0.6 + 255*0.4), int(tb*255*0.6 + 255*0.4))
+
+
+def sample_frosted_sash_rgb(image: Image.Image) -> tuple[float, float, float]:
+    """Dominant RGB of the top-right corner region the diagonal sash overlays."""
+    width, height = image.size
+    reg = image.crop((int(width * 0.55), 0, width, int(height * 0.22)))
+    blr = reg.filter(ImageFilter.GaussianBlur(radius=max(6, int(height * 0.02))))
+    th  = blr.resize((8, 8), Image.LANCZOS).convert("RGB")
+    ar  = np.array(th, dtype=np.float32)
+    return float(ar[:, :, 0].mean()), float(ar[:, :, 1].mean()), float(ar[:, :, 2].mean())
+
+
 def draw_award_sash(
     image: Image.Image,
     label: str,
@@ -1645,6 +1664,7 @@ def draw_award_sash(
     muted: bool = False,
     length_ratio: float = 1.15,
     height_ratio: float = 0.12,
+    poster_color: tuple[float, float, float] | None = None,
 ) -> Image.Image:
     width, height = image.size
 
@@ -1658,7 +1678,14 @@ def draw_award_sash(
 
     sl, sh = sash_length * SS, sash_height * SS
 
-    if sash_type == "win":
+    if poster_color is not None:
+        # Poster-derived colour: tint the band edges / border from the art (same
+        # logic the frosted notch uses).  The dark centre + light text are kept.
+        _t = _frosted_tint(*poster_color)
+        hi            = (*_t, 255)
+        lo            = tuple(max(0, int(c * 0.6)) for c in _t) + (255,)
+        border_colour = (*_t, 255)
+    elif sash_type == "win":
         hi, lo        = (212, 175, 55, 255), (160, 130, 40, 255)
         border_colour = (212, 175, 55, 255)
     elif sash_type == "prestige":
