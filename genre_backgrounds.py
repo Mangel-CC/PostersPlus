@@ -5,13 +5,13 @@ Generates a 500x750 themed background per genre (a starfield/nebula for Sci-Fi,
 blood drips for Horror, dusty sunset for Western, …) using only PIL + numpy, so
 there are no external art assets to ship and the set is fully regenerable.
 
-Run as a script to (re)write the PNGs into static/genre_bg/:
+Run as a script to (re)write the PNGs into static/genre_bg/minimal/:
 
     python genre_backgrounds.py
 
 At runtime main.py loads those PNGs (cached in memory) as the base for no-art
 fallback posters, then composites the title / sash on top as usual.
-Drop a hand-made 500x750 PNG into static/genre_bg/<Genre>.png to override any
+Drop a hand-made 500x750 PNG into static/genre_bg/minimal/<Genre>.png to override any
 genre's procedural art — the loader prefers an existing file.
 
 Backgrounds are kept fairly dark and weighted toward the upper two-thirds so the

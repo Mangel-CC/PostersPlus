@@ -3,6 +3,7 @@ import logging
 import os
 import sqlite3
 import threading
+import tempfile
 import time
 import json
 from datetime import datetime
@@ -188,6 +189,10 @@ def init_db() -> None:
             cached_at  INTEGER NOT NULL
         )
     """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_final_poster_cached_at "
+        "ON final_poster_cache(cached_at)"
+    )
 
     # Digital release cache.
     # Populated by the r/movieleaks poller; one row per IMDB ID.
@@ -431,7 +436,17 @@ def prune_caches() -> None:
             if r.rowcount:
                 logger.info(f"Pruned {r.rowcount} expired release status cache entries")
 
+            detection_cutoff = now - 180 * 86400
+            r = db.execute(
+                "DELETE FROM text_detection_cache WHERE cached_at < ?", (detection_cutoff,)
+            )
+            if r.rowcount:
+                logger.info(f"Pruned {r.rowcount} old text-detection cache entries")
+
             db.commit()
+
+        _prune_file_cache(TMDB_POSTER_CACHE_DIR, TMDB_POSTER_CACHE_DURATION)
+        _prune_file_cache(TMDB_LOGO_CACHE_DIR, TMDB_LOGO_CACHE_DURATION)
 
         # Reclaim free pages left by the deletes.
         with _db_lock:
@@ -522,7 +537,7 @@ def get_cached_rating(
          age_rating, is_cult_int, is_true_story_int, is_metacritic_int,
          rating_min_votes) = row
 
-        if rating_min_votes != RATING_MIN_VOTES:
+        if rating_min_votes is not None and rating_min_votes != RATING_MIN_VOTES:
             logger.info(
                 f"Rating cache policy changed for {imdb_id}: "
                 f"stored={rating_min_votes!r}, current={RATING_MIN_VOTES}; refreshing"
@@ -546,6 +561,19 @@ def get_cached_rating(
                 )
                 get_db().commit()
             return None
+
+        if rating_min_votes is None:
+            # Rows created before policy tracking are still valid until their
+            # normal TTL expires. Backfill in place instead of consuming one
+            # MDBList request per legacy cache entry after an upgrade.
+            with _db_lock:
+                get_db().execute(
+                    "UPDATE rating_cache SET rating_min_votes = ? "
+                    "WHERE imdb_id = ? AND rating_min_votes IS NULL",
+                    (RATING_MIN_VOTES, imdb_id),
+                )
+                get_db().commit()
+            logger.debug(f"Backfilled rating cache policy for {imdb_id}")
 
         ratings_dict = json.loads(ratings_json or "{}")
         wins = [w for w in (wins_raw or "").split("|") if w]
@@ -730,6 +758,52 @@ def set_cached_trending_snapshot(
 
 
 # ---------------------------------------------------------------------------
+# Filesystem cache helpers
+# ---------------------------------------------------------------------------
+
+def _atomic_write(path: str, data: bytes) -> None:
+    """Atomically replace *path* so readers never observe partial image bytes."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=os.path.dirname(path), prefix=".tmp-", delete=False
+        ) as tmp:
+            temp_path = tmp.name
+            tmp.write(data)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+def _prune_file_cache(base_dir: str, ttl_days: int) -> None:
+    cutoff = time.time() - ttl_days * 86400
+    removed = 0
+    try:
+        for entry in os.scandir(base_dir):
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            try:
+                if entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                    os.remove(entry.path)
+                    removed += 1
+            except FileNotFoundError:
+                pass
+        if removed:
+            logger.info(f"Pruned {removed} expired files from {base_dir}")
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning(f"File-cache prune failed for {base_dir}: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # TMDB poster cache
 # ---------------------------------------------------------------------------
 
@@ -763,9 +837,7 @@ def set_cached_tmdb_poster(cache_key: str, data: bytes) -> None:
     # back to RGBA on load.  ~4x faster decode vs PNG, ~5x smaller on disk.
     try:
         path = _safe_cache_path(TMDB_POSTER_CACHE_DIR, cache_key)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(data)
+        _atomic_write(path, data)
     except Exception as exc:
         logger.error(f"TMDB poster cache write error: {exc}")
 
@@ -818,16 +890,18 @@ def set_cached_tmdb_logo(cache_key: str, data: bytes) -> None:
     try:
         path = _safe_cache_path(TMDB_LOGO_CACHE_DIR, cache_key)
         _remove_if_dir(path)
-        with open(path, "wb") as f:
-            f.write(data)
+        _atomic_write(path, data)
     except Exception as exc:
         logger.error(f"TMDB logo cache write error: {exc}")
 
 def _safe_cache_path(base_dir: str, filename: str) -> str:
-    path = os.path.realpath(os.path.join(base_dir, filename))
-    if not path.startswith(os.path.realpath(base_dir)):
+    if os.path.isabs(filename):
+        raise ValueError(f"Absolute cache path rejected: {filename!r}")
+    base = os.path.realpath(base_dir)
+    path = os.path.realpath(os.path.join(base, filename))
+    if os.path.commonpath((base, path)) != base:
         raise ValueError(f"Path traversal attempt: {filename!r}")
-    return path        
+    return path
 
 # ---------------------------------------------------------------------------
 # TMDB metadata cache

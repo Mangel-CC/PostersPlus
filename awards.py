@@ -1211,7 +1211,7 @@ def parse_mdblist_awards(
 
 
 # ---------------------------------------------------------------------------
-# Sash drawing  (unchanged from original)
+# Sash drawing
 # ---------------------------------------------------------------------------
 
 def _text_center(
@@ -1312,7 +1312,7 @@ def sample_frosted_notch_rgb(
     size_ratio_w: float = 1.0,
     size_ratio_h: float = 1.0,
     font_size_ratio: float = 0.43,
-    notch_inset: float = 0.01,
+    notch_inset: float = 0.007,
     star: bool | None = None,
 ) -> tuple[float, float, float]:
     """Dominant RGB the frosted notch would sample from its crop region.
@@ -1362,7 +1362,7 @@ def draw_award_badge(
     size_ratio_h: float = 1.0,     # vertical scale multiplier
     notch_style: str = "frosted",     # "silver" | "gold" | "frosted"
     notch_text_offset: float = 0.0,   # downward text nudge as fraction of badge height
-    notch_inset: float = 0.01,        # top-edge offset as fraction of poster height (± small)
+    notch_inset: float = 0.007,        # top-edge offset as fraction of poster height (± small)
     font_size_ratio: float = 0.43,    # font size as fraction of badge height
     frost_opacity: float = 0.75,      # frosted overlay opacity (0.0–1.0)
     tint_rgb: tuple[float, float, float] | None = None,  # override sampled colour (frosted)

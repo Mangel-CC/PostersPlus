@@ -16,8 +16,6 @@ except ImportError:
 
 from awards import FETCH_FAILED, _FetchFailed, _RateLimited
 from config import (
-    MOVIE_WEIGHTS,
-    TV_WEIGHTS,
     GENRE_MAP,
     GENRE_PRIORITY,
     SCORE_NORMALISERS,

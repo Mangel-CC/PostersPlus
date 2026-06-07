@@ -35,7 +35,7 @@ Non self hosters can [visit the public instance.](https://postersplus.elfhosted.
 
 - **Title logos** - TMDB logos composited over the poster with configurable size and position. Language preference supports requested → original, original → requested, requested → text, and native-if-original → English → original modes before the language-neutral and Metahub fallbacks. This preserves native-language branding for native content while allowing English branding for foreign titles. Optional Textless toggle skips the logo entirely for clients that render the title separately.
 
-- **Art fallback chain** - when a title has no textless poster on TMDB the landscape backdrop is centre-cropped to portrait; when no poster art exists at all, an atmospheric genre background (a starfield for Sci-Fi, blood drips for Horror, a dusty sunset for Western, …) is used with the title text and a genre mascot. Backgrounds live in `static/genre_bg/` — regenerate them with `python genre_backgrounds.py`, or drop in your own 500×750 PNG per genre to override. Preview the full set in the configurator (Logo section → **Preview fallback art**) or at `/debug/fallback-gallery`. 
+- **Art fallback chain** - when a title has no textless poster on TMDB the landscape backdrop is cropped to portrait using face and visual-saliency detection; when no poster art exists at all, an atmospheric genre background (a starfield for Sci-Fi, blood drips for Horror, a dusty sunset for Western, …) is used with the title text and a genre mascot. Backgrounds live in style folders under `static/genre_bg/` — regenerate the minimal set with `python genre_backgrounds.py`, or replace `static/genre_bg/<style>/<Genre>.png` with your own 500×750 PNG. Preview the full set in the configurator (Logo section → **Preview fallback art**) or at `/debug/fallback-gallery`.
 
 - **Web configurator** - browser-based UI to tune every parameter and generate a ready-to-paste URL template. Per-section info modals, URL import (paste any /poster URL to hydrate every control), persistent settings via localStorage, and a mobile-optimised expanded preview.
 
@@ -61,7 +61,7 @@ Non self hosters can [visit the public instance.](https://postersplus.elfhosted.
 
 > **HTTPS or AIOMetadata's proxy opton is required for production use.**
 > If going HTTPS route ensure the access_key env is set to protect your instance
-> Good reverse proxy choices are [Traefik](https://traefik.io/) which has great support from Viren's templates or [Caddy](https://caddyserver.com/) which is very simple. 
+> Good reverse proxy choices are [Traefik](https://traefik.io/) which has great support from Viren's templates or [Caddy](https://caddyserver.com/) which is very simple.
 > If going for AIOMetadata's proxy you don't expose PostersPlus to the internet. Use http://postersplus:8000 in the URL instead of a domain to have them communicate via Docker's internal network. The proxy route is slightly slower but maximizes security.
 
 ### Using the pre-built image (recommended)
@@ -116,7 +116,8 @@ All configuration is done via environment variables. Copy `.env.example` to `.en
 |---|---|---|
 | `TMDB_API_KEY` | - | TMDB API key for poster/metadata fetching |
 | `MDBLIST_API_KEY` | - | MDBList API key for ratings and award data |
-| `MDBLIST_API_KEY_2` | - | Optional second MDBList key. Automatically rotated to when the primary key is rate-limited |
+| `MDBLIST_API_KEY_2` | - | Optional second MDBList key. Retried in the same request when the primary key is rate-limited |
+| `MDBLIST_CONCURRENCY` | `3` | Maximum concurrent outbound MDBList requests per worker |
 | `ACCESS_KEY` | - | Shared secret for request authentication. Leave blank to allow open access |
 | `WORKERS` | `1` | Uvicorn worker processes. One worker avoids duplicate uncached renders, scans, and API work across processes |
 | `AIOSTREAMS_URL` | - | Base URL of your AIOStreams instance (used when `QUALITY_SOURCE=aiostreams`) |
@@ -125,6 +126,7 @@ All configuration is done via environment variables. Copy `.env.example` to `.en
 | `SCRAPER_URL` | - | Base URL of a Stremio stream addon (e.g. `https://torrentio.strem.fun/`). Only used when `QUALITY_SOURCE=scraper`. Standalone addons like Torrentio and Comet work best; Stremthru Torz requires auth and should be used via AIOStreams instead |
 | `QUALITY_OLD_CACHE_DURATION` | `90` | Days to cache quality data for titles older than 2 weeks |
 | `QUALITY_BG_CONCURRENCY` | `5` | Max concurrent background quality fetches |
+| `QUALITY_WAIT_TIMEOUT` | `30` | Maximum seconds to wait when a request enables synchronous quality fetching |
 | `CDN_CACHE_TTL` | `0` | Adds `Cache-Control: public, max-age=N` to poster responses. Set to `0` to disable |
 | `JPEG_QUALITY` | `85` | JPEG output quality for composited posters (70–95). Raise to `92` for higher fidelity; lower to reduce file size |
 | `COMPOSITE_CACHE_TTL` | `604800` | Seconds to keep a rendered poster before re-rendering (default 7 days) |
@@ -150,6 +152,7 @@ All configuration is done via environment variables. Copy `.env.example` to `.en
 | `TEXTLESS_SCAN_TOP` | `0.08` | Fraction of poster height skipped from the top before counting text (covers top/middle/bottom titles; ignores top-edge logos) |
 | `BAKE_PPOCR_MODEL` | `true` | Build-time only. Bake the ~4.6MB PP-OCRv5 Mobile model into the image |
 | `DEFAULT_LOGO_LANGUAGE` | `en` | ISO 639-1 language code for title logos |
+| `DISCOVERY_OVERRIDES_PATH` | `/app/cache/discovery_overrides.json` | Optional custom path for discovery list overrides |
 
 > CPU guidance: keep `WORKERS × TEXTLESS_DETECTION_CONCURRENCY` at or below the CPU cores available to the container. Larger values can oversubscribe CPU, duplicate uncached work across workers, and reduce sustained throughput.
 
@@ -205,7 +208,7 @@ Sashes display contextual metadata about a title - awards, festival recognition,
 | True Story | Based on a true story |
 | Short / Mini / Binge | Short film, miniseries, or bingeable series |
 
-Sash priority order is configurable in the web configurator via drag-and-drop. Individual sashes can be disabled entirely with the ✕ button - disabled sashes are serialised as `-slot_name` in the URL (e.g. `&sash_priority=wins,cast,-trending`).
+Sash priority order is configurable in the web configurator via drag-and-drop. Notch mode defaults to a `0.007` top inset; existing URLs can override it with `sash_badge_inset`. Individual sashes can be disabled entirely with the ✕ button - disabled sashes are serialised as `-slot_name` in the URL (e.g. `&sash_priority=wins,cast,-trending`).
 
 ### Customising Directors, Studios, and Cast
 
@@ -233,7 +236,7 @@ To add a language, copy `languages/en.json` to `languages/<code>.json` (e.g. `fr
 
 ## Caching
 
-PostersPlus uses a SQLite database (WAL mode) for all caching. The cache volume is mounted at `/app/cache` and persists across container restarts.
+PostersPlus uses SQLite (WAL mode) for metadata and rendered-poster caching, plus filesystem caches for TMDB images. The cache volume is mounted at `/app/cache` and persists across container restarts. Expired database rows and image files are pruned automatically; render-affecting server settings and bundled assets are included in the composite cache signature.
 
 | Cache | Default TTL |
 |---|---|

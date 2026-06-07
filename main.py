@@ -134,6 +134,8 @@ _render_inflight: dict[str, "asyncio.Future[bytes]"] = {}
 
 _quality_bg_inflight: set[str] = set()
 _quality_bg_semaphore: "asyncio.Semaphore | None" = None   # created inside event loop
+_quality_source_backoff_until: dict[str, float] = {}
+_quality_source_fail_count: dict[str, int] = {}
 
 # ---------------------------------------------------------------------------
 # Rating fetch deduplication
@@ -146,13 +148,14 @@ _quality_bg_semaphore: "asyncio.Semaphore | None" = None   # created inside even
 #
 # _rating_fetch_inflight: maps imdb_id -> asyncio.Event that fires once the
 #   first fetch completes.  Subsequent requests wait, then re-read the DB.
-# _rating_backoff: maps imdb_id -> loop-time after which a new attempt is
-#   allowed.  Network failures use an escalating ladder (30s/2m/8m/1h);
-#   rate-limit responses use Retry-After or 1h flat.
+# _rating_backoff: maps (imdb_id, API key) -> loop-time after which a new
+#   attempt is allowed. Scoping by key lets a rotated or replaced key retry
+#   the same title immediately. Network failures use an escalating ladder
+#   (30s/2m/8m/1h); rate-limit responses use Retry-After or 1h flat.
 
 _rating_fetch_inflight:         dict[str, asyncio.Event] = {}
-_rating_backoff:                dict[str, float]          = {}  # imdb_id -> retry-after (loop time)
-_rating_fail_count:             dict[str, int]            = {}  # imdb_id -> consecutive network-failure count (for escalating back-off)
+_rating_backoff:                dict[tuple[str, str], float] = {}
+_rating_fail_count:             dict[tuple[str, str], int]   = {}
 _mdblist_semaphore:             "asyncio.Semaphore | None" = None  # caps concurrent MDBlist HTTP calls; created inside event loop
 # Caps parallel burned-in-text scans. Each slot owns an independent RapidOCR
 # session in a dedicated executor, so cold-cache OCR cannot occupy render workers.
@@ -385,6 +388,64 @@ _mdblist_key_cooldown: dict[str, float] = {}
 _mdblist_active_key_idx: int = 0
 
 
+def _quality_source_name() -> str:
+    return "scraper" if _cfg.QUALITY_SOURCE == "scraper" else "aiostreams"
+
+
+def _quality_backoff_remaining(now: float | None = None) -> float:
+    if now is None:
+        now = asyncio.get_running_loop().time()
+    return max(0.0, _quality_source_backoff_until.get(_quality_source_name(), 0.0) - now)
+
+
+def _record_quality_result(result) -> None:
+    source = _quality_source_name()
+    if result is not FETCH_FAILED:
+        _quality_source_backoff_until.pop(source, None)
+        _quality_source_fail_count.pop(source, None)
+        return
+    now = asyncio.get_running_loop().time()
+    if _quality_source_backoff_until.get(source, 0.0) > now:
+        return
+    failures = _quality_source_fail_count.get(source, 0) + 1
+    _quality_source_fail_count[source] = failures
+    delay = min(30.0 * (4 ** (failures - 1)), 1800.0)
+    _quality_source_backoff_until[source] = now + delay
+    logger.warning(f"Quality source {source} unavailable; backing off for {delay:.0f}s")
+
+
+def _next_mdblist_server_key(current_key: str, now: float | None = None) -> str | None:
+    """Select a healthy configured server key after *current_key*."""
+    global _mdblist_active_key_idx
+    keys = _cfg.SERVER_MDBLIST_KEYS
+    if len(keys) < 2 or current_key not in keys:
+        return None
+    if now is None:
+        now = asyncio.get_running_loop().time()
+    start = keys.index(current_key)
+    for offset in range(1, len(keys)):
+        idx = (start + offset) % len(keys)
+        candidate = keys[idx]
+        if now >= _mdblist_key_cooldown.get(candidate, 0.0):
+            _mdblist_active_key_idx = idx
+            return candidate
+    return None
+
+
+def _mark_mdblist_rate_limit(
+    imdb_id: str, key: str, result
+) -> tuple[float, str | None]:
+    """Cool down a rate-limited key and select a healthy configured fallback."""
+    if result.retry_after:
+        backoff_secs = min(float(result.retry_after), 3600.0)
+    else:
+        backoff_secs = 3600.0
+    now = asyncio.get_running_loop().time()
+    _mdblist_key_cooldown[key] = now + backoff_secs
+    _rating_backoff[_rating_retry_key(imdb_id, key)] = now + backoff_secs
+    return backoff_secs, _next_mdblist_server_key(key, now)
+
+
 async def _background_quality_fetch(
     imdb_id: str,
     media_type: str,
@@ -400,18 +461,27 @@ async def _background_quality_fetch(
         async with _quality_bg_semaphore:
             if _HTTP_CLIENT is None:
                 return
+            remaining = _quality_backoff_remaining()
+            if remaining > 0:
+                logger.debug(
+                    f"Quality fetch skipped for {imdb_id}; source cooldown has {remaining:.0f}s remaining"
+                )
+                return
             if _cfg.QUALITY_SOURCE == "scraper" and _cfg.SCRAPER_URL:
-                await _with_retry(
+                result = await _with_retry(
                     fetch_quality_from_scraper,
                     _HTTP_CLIENT, _cfg.SCRAPER_URL, imdb_id, media_type, season, episode, release_date,
                 )
             else:
-                await _with_retry(
+                result = await _with_retry(
                     fetch_quality_from_aiostreams,
                     _HTTP_CLIENT, imdb_id, media_type, season, episode, release_date,
                 )
-            logger.info(f"Background quality fetch complete for {imdb_id}")
+            _record_quality_result(result)
+            if result is not FETCH_FAILED:
+                logger.info(f"Background quality fetch complete for {imdb_id}")
     except Exception as exc:
+        _record_quality_result(FETCH_FAILED)
         logger.warning(f"Background quality fetch failed for {imdb_id}: {exc}")
     finally:
         _quality_bg_inflight.discard(imdb_id)
@@ -536,6 +606,11 @@ def _resolve_mdblist_key(query_key: str) -> str | None:
     return None
 
 
+def _rating_retry_key(imdb_id: str, mdblist_key: str) -> tuple[str, str]:
+    """Identify retry state for one title on one MDBList API key."""
+    return imdb_id, mdblist_key
+
+
 def _detection_vote_ok(vote_count: int | None) -> bool:
     """True when an asset should be scanned during the foreground request."""
     return vote_count is not None and vote_count <= _cfg.TEXTLESS_DETECTION_MAX_VOTES
@@ -642,7 +717,7 @@ class RequestConfig:
     sash_badge_size_w: float = 1.05      # horizontal scale of badge
     sash_badge_size_h: float = 1.05      # vertical scale of badge
     sash_badge_notch_offset: float = 0.0   # downward text nudge as fraction of badge height
-    sash_badge_inset: float = 0.009        # top-edge offset as fraction of poster height (± small)
+    sash_badge_inset: float = 0.007        # top-edge offset as fraction of poster height (± small)
     sash_badge_font_ratio:   float = 0.43  # font size as fraction of badge height
     sash_badge_frost_opacity: float = 0.75 # frosted overlay opacity (0.0–1.0)
     sash_length_ratio: float = 1.15  # diagonal sash length as fraction of poster width
@@ -1550,7 +1625,7 @@ async def _cache_prune_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _HTTP_CLIENT, _configurator_html
+    global _HTTP_CLIENT, _configurator_html, _render_assets_signature
     global _background_detection_queue, _background_detection_task
     init_db()
     logger.info(f"Cache initialised (composite TTL {_cfg.COMPOSITE_CACHE_TTL}s / "
@@ -1570,6 +1645,7 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Unknown QUALITY_SOURCE={_cfg.QUALITY_SOURCE!r} — defaulting to aiostreams behaviour.")
     _configurator_html = _load_configurator_html()
     load_languages()   # poster-output translations (English fallback if absent)
+    _render_assets_signature = _compute_render_assets_signature()
     # Warm the genre fallback backgrounds into memory so no-art posters render
     # with zero extra latency (same idea as the badge cache warm-up).
     try:
@@ -1720,6 +1796,47 @@ _configurator_html: str | None = None
 # which is what made sliders / dropdowns drift out of sync with the new
 # defaults until a manual Reset.
 _configurator_etag: str | None = None
+_RENDER_CACHE_VERSION = "2"
+_render_assets_signature = "startup"
+
+
+def _compute_render_assets_signature() -> str:
+    digest = hashlib.sha256()
+    roots = (
+        os.path.join(BASE_DIR, "languages"),
+        os.path.join(BASE_DIR, "static", "genre_bg"),
+    )
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _, filenames in os.walk(root):
+            for filename in sorted(filenames):
+                path = os.path.join(dirpath, filename)
+                try:
+                    stat = os.stat(path)
+                except OSError:
+                    continue
+                digest.update(os.path.relpath(path, BASE_DIR).encode())
+                digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode())
+    override_path = os.environ.get(
+        "DISCOVERY_OVERRIDES_PATH", "/app/cache/discovery_overrides.json"
+    )
+    try:
+        with open(override_path, "rb") as override_file:
+            digest.update(override_file.read())
+    except OSError:
+        pass
+    return digest.hexdigest()[:16]
+
+
+def _server_render_signature() -> str:
+    return "|".join((
+        f"render={_RENDER_CACHE_VERSION}",
+        f"jpeg={_cfg.JPEG_QUALITY}",
+        f"contrast={int(_cfg.LOGO_CONTRAST_RESCUE)}",
+        f"stretch={int(_cfg.LOGO_STRETCH_DISABLED)}:{_cfg.LOGO_STRETCH_FACTOR:g}",
+        f"assets={_render_assets_signature}",
+    ))
 
 
 def _load_configurator_html() -> str:
@@ -1768,8 +1885,10 @@ async def stats(access_key: str = ""):
         "runtime": {
             "renders_in_flight":        len(_render_inflight),
             "quality_fetches_in_flight": len(_quality_bg_inflight),
+            "quality_source_backoff_secs": round(_quality_backoff_remaining(now)),
             "rating_fetches_in_flight":  len(_rating_fetch_inflight),
-            "rating_backoff_titles":     len(_rating_backoff),
+            "rating_backoff_titles":     len({imdb_id for imdb_id, _ in _rating_backoff}),
+            "rating_backoff_entries":    len(_rating_backoff),
             "mdblist_keys":              mdblist_keys,
             "composite_cache_disabled":  _cfg.DISABLE_COMPOSITE_CACHE,
             "svg_logo_support":          svg_logo_supported(),
@@ -1784,6 +1903,9 @@ _DEBUG_GENRE_IDS = {
     "Horror": 27, "Music": 10402, "Mystery": 9648, "Romance": 10749,
     "Sci-Fi": 878, "Thriller": 53, "War": 10752, "Western": 37,
 }
+_DEBUG_CANVAS_TTL = 300.0
+_DEBUG_CANVAS_MAX_ENTRIES = 128
+_debug_canvas_cache: dict[tuple[str, str, str, str, str], tuple[float, bytes]] = {}
 
 
 @app.get("/debug/canvas")
@@ -1798,6 +1920,16 @@ async def debug_canvas(genre: str = "Action", title: str = "Sample Title",
     """
     if _cfg.ACCESS_KEY and not hmac.compare_digest(access_key, _cfg.ACCESS_KEY):
         raise HTTPException(status_code=403, detail="Unauthorized")
+    if len(title) > 200:
+        raise HTTPException(status_code=400, detail="Title too long")
+    cache_key = (genre, title, style, year, score)
+    now = asyncio.get_running_loop().time()
+    cached = _debug_canvas_cache.get(cache_key)
+    if cached is not None and now - cached[0] <= _DEBUG_CANVAS_TTL:
+        return Response(
+            content=cached[1], media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=300"},
+        )
     gid = _DEBUG_GENRE_IDS.get(genre)
     canvas = _load_genre_background(genre, style)
     if canvas is None:
@@ -1808,8 +1940,15 @@ async def debug_canvas(genre: str = "Action", title: str = "Sample Title",
                        release_year=(year or None), no_poster=True)
     buf = io.BytesIO()
     img.convert("RGB").save(buf, format="JPEG", quality=90)
-    return Response(content=buf.getvalue(), media_type="image/jpeg",
-                    headers={"Cache-Control": "no-store"})
+    jpeg = buf.getvalue()
+    if len(_debug_canvas_cache) >= _DEBUG_CANVAS_MAX_ENTRIES:
+        oldest = min(_debug_canvas_cache, key=lambda key: _debug_canvas_cache[key][0])
+        _debug_canvas_cache.pop(oldest, None)
+    _debug_canvas_cache[cache_key] = (now, jpeg)
+    return Response(
+        content=jpeg, media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @app.get("/debug/fallback-gallery", response_class=HTMLResponse)
@@ -2088,15 +2227,17 @@ async def get_poster(
             f"|rp={_cfg.RATING_MIN_VOTES}:"
             f"{int(rcfg.fallback_to_imdb)}"
         )
-        _params_hash = hashlib.md5(
+        _server_sig = "|server=" + _server_render_signature()
+        _params_hash = hashlib.sha256(
             (
                 "&".join(f"{k}={v}" for k, v in sorted(raw_params.items()))
                 + _detect_sig
                 + _poster_selection_sig
                 + _rating_policy_sig
+                + _server_sig
             ).encode()
-        ).hexdigest()[:8]
-        final_cache_key = f"{imdb_id}:{type}:{_params_hash}"
+        ).hexdigest()[:16]
+        final_cache_key = f"{imdb_id}:{tmdb_id}:{type}:{_params_hash}"
         cached_jpeg = None if _force_refresh else get_cached_final_poster(final_cache_key)
         if _force_refresh:
             logger.info(f"Force refresh (nocache) for {final_cache_key} — bypassing cache read")
@@ -2184,11 +2325,11 @@ async def get_poster(
     # ------------------------------------------------------------------
     # Rating fetch coalescing + back-off
     #
-    # Goal: ensure at most one MDBlist call per imdb_id per worker at a
-    # time, and suppress re-fetches for an hour after a confirmed failure.
+    # Goal: ensure at most one MDBList call per imdb_id per worker at a
+    # time, and suppress repeated failures with key-scoped cooldowns.
     #
-    # Back-off check: if a recent fetch returned FETCH_FAILED, skip the
-    # API call entirely until the TTL expires.
+    # Back-off check: if a recent fetch failed, skip that title-key pair
+    # until its escalating retry delay expires.
     #
     # Coalescing: if another coroutine in this worker is already fetching
     # the same imdb_id, wait for its asyncio.Event, then re-read the DB.
@@ -2198,43 +2339,44 @@ async def get_poster(
     # ------------------------------------------------------------------
     _rating_event_to_set: asyncio.Event | None = None
     _rating_backoff_active = False  # set when backoff nullifies the key; used to suppress final-poster caching
+    _mdblist_unavailable_reason = "no API key configured"
 
     if not rating_already_cached and effective_mdblist_key:
         _loop_now = asyncio.get_running_loop().time()
 
-        # Per-key cooldown: if the current active key is still cooling down, try to
-        # rotate to the next available key before giving up entirely.
+        # Per-key cooldown: configured server keys may rotate; request-supplied
+        # keys remain isolated and simply wait for their own cooldown to expire.
         if effective_mdblist_key and _loop_now < _mdblist_key_cooldown.get(effective_mdblist_key, 0.0):
-            _server_keys = _cfg.SERVER_MDBLIST_KEYS
-            _rotated = False
-            for _i in range(1, len(_server_keys)):
-                _candidate = _server_keys[(_mdblist_active_key_idx + _i) % len(_server_keys)]
-                if _loop_now >= _mdblist_key_cooldown.get(_candidate, 0.0):
-                    _mdblist_active_key_idx = (_mdblist_active_key_idx + _i) % len(_server_keys)
-                    effective_mdblist_key = _candidate
-                    logger.info(f"MDBlist key rotated to key #{_mdblist_active_key_idx + 1} for {imdb_id}")
-                    _rotated = True
-                    break
-            if not _rotated:
-                _remaining = _mdblist_key_cooldown.get(effective_mdblist_key, 0.0) - _loop_now
+            _cooling_key = effective_mdblist_key
+            _replacement = _next_mdblist_server_key(_cooling_key, _loop_now)
+            if _replacement is not None:
+                effective_mdblist_key = _replacement
+                logger.info(
+                    f"MDBList key rotated to key #{_mdblist_active_key_idx + 1} for {imdb_id}"
+                )
+            else:
+                _remaining = _mdblist_key_cooldown.get(_cooling_key, 0.0) - _loop_now
                 logger.debug(
                     f"Rating fetch for {imdb_id} skipped "
-                    f"(all MDBlist keys cooling down; {_remaining:.0f}s remaining on active key)"
+                    f"(selected MDBList key cooling down; {_remaining:.0f}s remaining)"
                 )
                 effective_mdblist_key = None
                 _rating_backoff_active = True
+                _mdblist_unavailable_reason = "selected key is cooling down"
 
-        # Per-title backoff (network failures, or this specific title's last 429).
+        # Per-title and key backoff (network failures, or this title-key pair's last 429).
         if effective_mdblist_key:
-            _backoff_until = _rating_backoff.get(imdb_id)
+            _retry_key = _rating_retry_key(imdb_id, effective_mdblist_key)
+            _backoff_until = _rating_backoff.get(_retry_key)
             if _backoff_until is not None:
                 if _loop_now < _backoff_until:
-                    logger.debug(f"Rating fetch for {imdb_id} skipped (MDBlist per-title back-off active)")
+                    logger.debug(f"Rating fetch for {imdb_id} skipped (MDBList back-off active for selected key)")
                     effective_mdblist_key = None
                     _rating_backoff_active = True
+                    _mdblist_unavailable_reason = "selected key is in back-off for this title"
                 else:
-                    del _rating_backoff[imdb_id]       # expired — allow a fresh attempt
-                    _rating_fail_count.pop(imdb_id, None)  # reset escalation for clean slate
+                    del _rating_backoff[_retry_key]       # expired — allow a fresh attempt
+                    _rating_fail_count.pop(_retry_key, None)  # reset escalation for clean slate
 
     if not rating_already_cached and effective_mdblist_key:
         _inflight_event = _rating_fetch_inflight.get(imdb_id)
@@ -2263,12 +2405,15 @@ async def get_poster(
             else:
                 # The other fetch also failed; re-check back-off it may have set.
                 _loop_now2    = asyncio.get_running_loop().time()
-                _backoff_now2 = _rating_backoff.get(imdb_id)
+                _retry_key2 = _rating_retry_key(imdb_id, effective_mdblist_key)
+                _backoff_now2 = _rating_backoff.get(_retry_key2)
                 if _backoff_now2 is not None and _loop_now2 < _backoff_now2:
                     logger.debug(
                         f"Rating fetch for {imdb_id} suppressed after coalescence (back-off active)"
                     )
                     effective_mdblist_key = None
+                    _rating_backoff_active = True
+                    _mdblist_unavailable_reason = "selected key is in back-off for this title"
         else:
             # First request for this imdb_id — claim the fetch slot.
             _rating_event_to_set              = asyncio.Event()
@@ -2288,14 +2433,16 @@ async def get_poster(
         bool(_cfg.AIOSTREAMS_URL and _cfg.AIOSTREAMS_AUTH)
         or (_cfg.QUALITY_SOURCE == "scraper" and bool(_cfg.SCRAPER_URL))
     )
+    _quality_cooldown_active = _has_quality_source and _quality_backoff_remaining() > 0
     quality_needs_fetch = (
         rcfg.badge_display_mode in (1, 2, 4)
         and not quality
         and cached_tokens is None
         and _has_quality_source
+        and not _quality_cooldown_active
     )
 
-    quality_pending = False
+    quality_pending = bool(_quality_cooldown_active and cached_tokens is None)
     if quality_needs_fetch and not rcfg.wait_for_quality:
         # Fire-and-forget background fetch — poster is served immediately
         # without badges; the cache will be warm on the next request.
@@ -2315,7 +2462,7 @@ async def get_poster(
 
     if not rating_already_cached and not effective_mdblist_key:
         logger.warning(
-            f"No MDblist key for {imdb_id} and no cached rating — "
+            f"MDBList unavailable for {imdb_id}: {_mdblist_unavailable_reason} — "
             "poster will be served without rating/award data."
         )
 
@@ -2410,7 +2557,7 @@ async def get_poster(
                 _mdblist_semaphore = asyncio.Semaphore(_cfg.MDBLIST_CONCURRENCY)
 
             async def _fetch_rating_gated(
-                _client=client, _imdb_id=imdb_id, _key=effective_mdblist_key,
+                _key: str, _client=client, _imdb_id=imdb_id,
                 _gids=genre_ids, _type=type,
                 _mw=effective_movie_weights, _tw=effective_tv_weights,
             ):
@@ -2421,7 +2568,7 @@ async def get_poster(
                         movie_weights=_mw, tv_weights=_tw,
                     )
 
-            rating_coro = _fetch_rating_gated()
+            rating_coro = _fetch_rating_gated(effective_mdblist_key)
 
         # Quality is normally fetched in the background (not in this gather).
         # The one exception — wait_for_quality — is handled inline after the
@@ -2575,12 +2722,24 @@ async def get_poster(
             fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type),
         )
 
-        # Release the rating inflight event early — the rating is now cached so
-        # any coalesced requests can proceed without waiting for the quality fetch.
-        if _rating_event_to_set is not None:
-            _rating_event_to_set.set()
-            _rating_fetch_inflight.pop(imdb_id, None)
-            _rating_event_to_set = None   # prevent redundant set in finally block
+        # A rate-limited server key gets one same-request rescue attempt on the
+        # next healthy configured key. Query-supplied keys remain isolated.
+        if isinstance(rating_result, _RateLimited) and effective_mdblist_key:
+            _failed_key = effective_mdblist_key
+            _backoff_secs, _rescue_key = _mark_mdblist_rate_limit(
+                imdb_id, _failed_key, rating_result
+            )
+            logger.warning(
+                f"MDBList key rate-limited for {imdb_id}; cooling down for "
+                f"{_backoff_secs:.0f}s"
+            )
+            if _rescue_key is not None:
+                effective_mdblist_key = _rescue_key
+                logger.warning(
+                    f"Retrying MDBList for {imdb_id} with configured key "
+                    f"#{_mdblist_active_key_idx + 1}"
+                )
+                rating_result = await _fetch_rating_gated(_rescue_key)
 
         # Inline quality wait — runs after gather so rating coalescing is never
         # blocked.  Used for poster-warm workflows where latency doesn't matter.
@@ -2600,6 +2759,7 @@ async def get_poster(
                 fetched = await asyncio.wait_for(
                     _inline_fetch(), timeout=_cfg.QUALITY_WAIT_TIMEOUT
                 )
+                _record_quality_result(fetched)
                 if fetched is not FETCH_FAILED:
                     quality_tokens = fetched
                     logger.info(f"Inline quality fetch complete for {imdb_id}: {quality_tokens}")
@@ -2612,6 +2772,7 @@ async def get_poster(
                     )
                     quality_pending = True
             except asyncio.TimeoutError:
+                _record_quality_result(FETCH_FAILED)
                 logger.warning(
                     f"Quality wait timed out for {imdb_id} "
                     f"after {_cfg.QUALITY_WAIT_TIMEOUT:.0f}s — serving without quality, "
@@ -2632,55 +2793,30 @@ async def get_poster(
 
         if rating_failed:
             if rate_limited:
-                # HTTP 429 — honour Retry-After if present, otherwise default 1 h.
-                # Cap at 1 h so a misbehaving upstream can't park us indefinitely.
-                if rating_result.retry_after:
-                    backoff_secs = min(float(rating_result.retry_after), 3600.0)
-                    logger.warning(
-                        f"MDblist rate-limited {imdb_id} — honouring Retry-After "
-                        f"({backoff_secs:.0f}s)"
+                _retry_key = _rating_retry_key(imdb_id, effective_mdblist_key)
+                if _retry_key not in _rating_backoff:
+                    backoff_secs, _ = _mark_mdblist_rate_limit(
+                        imdb_id, effective_mdblist_key, rating_result
                     )
-                else:
-                    backoff_secs = 3600.0
-                    logger.warning(f"MDblist rate-limited {imdb_id} — using 1h default back-off")
-
-                # Mark this specific key as cooling down, then rotate to the next
-                # available key so subsequent requests can proceed immediately.
-                _now2 = asyncio.get_running_loop().time()
-                _mdblist_key_cooldown[effective_mdblist_key] = _now2 + backoff_secs
-                _server_keys = _cfg.SERVER_MDBLIST_KEYS
-                if len(_server_keys) > 1:
-                    for _i in range(1, len(_server_keys)):
-                        _candidate = _server_keys[(_mdblist_active_key_idx + _i) % len(_server_keys)]
-                        if _now2 >= _mdblist_key_cooldown.get(_candidate, 0.0):
-                            _mdblist_active_key_idx = (_mdblist_active_key_idx + _i) % len(_server_keys)
-                            logger.warning(
-                                f"MDBlist key #{(_mdblist_active_key_idx - _i) % len(_server_keys) + 1} rate-limited "
-                                f"— rotated to key #{_mdblist_active_key_idx + 1}"
-                            )
-                            break
-                    else:
-                        logger.warning(
-                            f"MDBlist rate-limited — all {len(_server_keys)} keys cooling down "
-                            f"for up to {backoff_secs:.0f}s"
-                        )
-                else:
                     logger.warning(
-                        f"MDBlist rate-limited — single key cooling down for {backoff_secs:.0f}s "
-                        f"(add MDBLIST_API_KEY_2 for automatic rotation)"
+                        f"MDBList rate-limited {imdb_id}; key cooling down for "
+                        f"{backoff_secs:.0f}s"
                     )
             else:
                 # Network / timeout failure — escalating back-off so a transient
                 # hiccup retries quickly while a sustained outage backs off further.
                 # Ladder: 30 s → 2 min → 8 min → 1 h (cap), using 4× multiplier.
-                fail_n = _rating_fail_count.get(imdb_id, 0) + 1
-                _rating_fail_count[imdb_id] = fail_n
+                _failed_retry_key = _rating_retry_key(imdb_id, effective_mdblist_key)
+                fail_n = _rating_fail_count.get(_failed_retry_key, 0) + 1
+                _rating_fail_count[_failed_retry_key] = fail_n
                 backoff_secs = min(30 * (4 ** (fail_n - 1)), 3600.0)
                 logger.warning(
                     f"Rating fetch failed for {imdb_id} (attempt {fail_n}) "
                     f"— back-off {backoff_secs:.0f}s"
                 )
-            _rating_backoff[imdb_id] = asyncio.get_running_loop().time() + backoff_secs
+            if not rate_limited:
+                _failed_retry_key = _rating_retry_key(imdb_id, effective_mdblist_key)
+                _rating_backoff[_failed_retry_key] = asyncio.get_running_loop().time() + backoff_secs
             ratings_dict   = {}
             genre          = cached_genre or _tmdb_genre
             rel            = cached_release_date
@@ -2701,8 +2837,14 @@ async def get_poster(
 
             # Fresh successful fetch — clear any escalation state so future
             # failures start back at the shortest interval.
-            if not rating_already_cached and not _rating_backoff_active:
-                _rating_fail_count.pop(imdb_id, None)
+            if (
+                not rating_already_cached
+                and not _rating_backoff_active
+                and effective_mdblist_key
+            ):
+                _rating_fail_count.pop(
+                    _rating_retry_key(imdb_id, effective_mdblist_key), None
+                )
 
             if isinstance(ratings_dict, dict):
                 weights = (
@@ -2764,6 +2906,14 @@ async def get_poster(
             logger.info(f"Rating cached for {imdb_id}: score={score} genre={genre} "
                         f"wins={award_wins} noms={award_noms} festival={festival_label} "
                         f"age_rating={age_rating}")
+
+        # Publish completion only after success is cached or failure backoff is
+        # established. Otherwise a waiter can wake, miss the row, and duplicate
+        # the same MDBList request.
+        if _rating_event_to_set is not None:
+            _rating_event_to_set.set()
+            _rating_fetch_inflight.pop(imdb_id, None)
+            _rating_event_to_set = None
 
         logger.info(f"Quality for {imdb_id}: tokens={quality_tokens} year={release_year}")
 
@@ -2979,9 +3129,9 @@ async def get_poster(
         raise HTTPException(status_code=500, detail="Failed to build poster")
     finally:
         _active_poster_renders = max(0, _active_poster_renders - 1)
-        # Fire the rating event so any coalesced waiters unblock.  Under normal
-        # operation this was already set early (after gather); this is the
-        # safety net for error paths where we exit before reaching that point.
+        # Fire the rating event so any coalesced waiters unblock. Under normal
+        # operation this was set after cache persistence; this is the safety
+        # net for error paths that exit before reaching that point.
         if _rating_event_to_set is not None:
             _rating_event_to_set.set()
             _rating_fetch_inflight.pop(imdb_id, None)

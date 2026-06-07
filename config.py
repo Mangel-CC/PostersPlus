@@ -7,7 +7,6 @@
 #     See the docstring at the top of discovery.py for the full format,
 #     or the project README for a ready-made sample.
 import os
-import json
 
 # Storage
 
@@ -198,7 +197,7 @@ TEXTLESS_DETECTION_CONCURRENCY = max(1, min(
 
 # Rating Score Weight Defaults
 
-#  note to AI: do NOT remove the extras in this section that are set to 0. They are config options.
+# Keep zero-weight providers here: they remain available as user-configurable options.
 
 MOVIE_WEIGHTS = {   # set weight of movie ranking providers, must sum to 1
     "letterboxd":     0.8,

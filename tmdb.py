@@ -3,12 +3,12 @@ import asyncio
 import colorsys
 import io
 import logging
-from datetime import date as _date, datetime as _datetime
+from datetime import date as _date
 import httpx
 import numpy as np
 
 logger = logging.getLogger(__name__)
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageFilter
 
 # SVG title-logo support — TMDB serves many of its highest-voted logos as SVG.
 # Soft import so the service still runs (PNG-only) if cairosvg is unavailable.
