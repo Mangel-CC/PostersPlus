@@ -455,7 +455,7 @@ from quality import (
     render_badges_left,
 )
 from ratings import calculate_weighted_score, draw_score_bar, fetch_rating, draw_score_bar_vertical, _draw_solid_pip, draw_frosted_bar, _score_color, _score_color_alt, _score_color_metal
-from tmdb import composite_logo, logo_centre_y, fetch_logo, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION
+from tmdb import composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION
 
 # ---------------------------------------------------------------------------
 # Persistent HTTP client
@@ -614,6 +614,8 @@ class RequestConfig:
     # an anime).  "text" = render the translated title as text.
     #   "native_original" (default): native → original → text
     #   "original_native":           original → native → text
+    #   "native_if_original_english": native if content is native, else English
+    #                                 → original → text
     #   "native_text":               native → text (no original-language logo)
     logo_priority: str = "native_original"
     # Fallback-poster style for titles with no art: "minimal" (procedural textured
@@ -831,7 +833,12 @@ def build_request_config(params: dict) -> RequestConfig:
 
     cfg.logo_language        = (params.get("logo_language", cfg.logo_language).strip().lower())
     _lp = params.get("logo_priority")
-    if _lp in ("native_original", "original_native", "native_text"):
+    if _lp in (
+        "native_original",
+        "original_native",
+        "native_if_original_english",
+        "native_text",
+    ):
         cfg.logo_priority = _lp
     elif "logo_native_fallback" in params:
         # Legacy param (boolean): true → native_original, false → native_text.
@@ -2356,23 +2363,22 @@ async def get_poster(
         # Original-art mode: serve a TMDB poster (title baked into the art) as-is.
         # Override the textless/backdrop selection, force is_textless=False so the
         # existing gates skip our logo, text detection and the backdrop rescue.
-        # Poster language reuses logo_priority (there's no text fallback here):
-        #   original_native → content's original-language poster first
-        #   native_original / native_text → viewer-language poster first
+        # Poster language reuses logo_priority (there's no text fallback here).
         # "native" is the REQUEST's logo_language (selected from poster_langs at
         # render time, so it isn't baked to whatever language first cached this
         # title).  Both fall back to the primary poster; off if none exist.
         _plangs    = tmdb_data.get("poster_langs") or {}
-        _p_native  = _plangs.get(rcfg.logo_language)
-        _p_orig    = _plangs.get(tmdb_data.get("original_language"))
         _p_default = tmdb_data.get("original_poster_path")
-        # Determine the priority-first language so we know what "output language"
-        # the user is targeting.
         _original_lang = tmdb_data.get("original_language") or ""
-        if rcfg.logo_priority == "original_native":
-            _priority_lang = _original_lang
-        else:  # native_original / native_text
-            _priority_lang = rcfg.logo_language or ""
+        _poster_language_order = image_language_order(
+            rcfg.logo_language, _original_lang, rcfg.logo_priority
+        )
+        _priority_lang = _poster_language_order[0] if _poster_language_order else ""
+        _ranked_posters = [
+            _plangs[language]
+            for language in _poster_language_order
+            if _plangs.get(language)
+        ]
         # art_source only matters when the priority-first language is English —
         # the two TMDB English poster candidates (editorial primary vs
         # community top-rated) can differ meaningfully.  For non-English
@@ -2382,16 +2388,10 @@ async def get_poster(
             _priority_lang == "en"
             and rcfg.original_art_source == "primary"
         )
-        if rcfg.logo_priority == "original_native":
-            if _use_primary:
-                _orig_art = _p_default or _p_orig or _p_native
-            else:
-                _orig_art = _p_orig or _p_native or _p_default
-        else:  # native_original / native_text
-            if _use_primary:
-                _orig_art = _p_default or _p_native or _p_orig
-            else:
-                _orig_art = _p_native or _p_orig or _p_default
+        if _use_primary:
+            _orig_art = _p_default or next(iter(_ranked_posters), None)
+        else:
+            _orig_art = next(iter(_ranked_posters), None) or _p_default
         _use_original_art = rcfg.use_original_art and bool(_orig_art)
         if _use_original_art:
             poster_path   = _orig_art

@@ -873,6 +873,28 @@ async def _fetch_metahub_logo(
     return logo
 
 
+def image_language_order(
+    logo_language: str,
+    original_language: str | None,
+    logo_priority: str,
+) -> list[str]:
+    """Return the distinct language buckets to try, in priority order."""
+    if logo_priority == "original_native":
+        languages = [original_language, logo_language]
+    elif logo_priority == "native_if_original_english":
+        languages = (
+            [logo_language, "en", original_language]
+            if original_language == logo_language
+            else ["en", original_language]
+        )
+    elif logo_priority == "native_text":
+        languages = [logo_language]
+    else:
+        languages = [logo_language, original_language]
+
+    return list(dict.fromkeys(language for language in languages if language))
+
+
 async def fetch_logo(
     client: httpx.AsyncClient,
     logos: list[dict],
@@ -893,6 +915,8 @@ async def fetch_logo(
       logo_priority:
         "native_original" (default) → native, then original
         "original_native"           → original, then native
+        "native_if_original_english" → native when the content is native,
+                                        otherwise English, then original
         "native_text"               → native only (skip the original-language
                                        bucket so the caller's text-title fallback
                                        renders the translated title instead)
@@ -911,27 +935,21 @@ async def fetch_logo(
     _exts = (".png", ".svg") if _HAS_CAIROSVG else (".png",)
     _cand = [lg for lg in logos if lg["file_path"].lower().endswith(_exts)]
 
-    preferred = [lg for lg in _cand if lg.get("iso_639_1") == logo_language]
-    # Original-language logos.  Empty when original_language wasn't provided,
-    # when it duplicates the requested-language bucket, or when the caller opted
-    # for "native_text" (prefer a text-title fallback over an original-lang logo).
-    original  = (
-        [lg for lg in _cand if lg.get("iso_639_1") == original_language]
-        if (original_language and original_language != logo_language
-            and logo_priority != "native_text")
-        else []
-    )
+    language_buckets = {
+        language: [lg for lg in _cand if lg.get("iso_639_1") == language]
+        for language in image_language_order(
+            logo_language, original_language, logo_priority
+        )
+    }
     neutral   = [lg for lg in _cand if lg.get("iso_639_1") in (None, "")]
     english   = [lg for lg in _cand if lg.get("iso_639_1") == "en"]
 
-    # Order the two language buckets per logo_priority, then the common
-    # fallbacks: language-neutral → English → (Metahub) → None.
-    # Note: when logo_language == "en", preferred and english are the same bucket;
-    # the "or" short-circuits so english is never tried twice.
-    if logo_priority == "original_native":
-        candidates = original or preferred or neutral or english
-    else:  # "native_original" and "native_text" both lead with the native bucket
-        candidates = preferred or original or neutral or english
+    candidates = []
+    for language in language_buckets:
+        if language_buckets[language]:
+            candidates = language_buckets[language]
+            break
+    candidates = candidates or neutral or english
 
     candidates = sorted(
         candidates,
