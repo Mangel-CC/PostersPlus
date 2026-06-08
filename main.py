@@ -623,6 +623,13 @@ def _detection_vote_ok(vote_count: int | None) -> bool:
 _CLIENT_EDGE_INSETS = {
     "stremio_tv_nuvio": (0.0, 0.0),
     "stremio_desktop_web": (0.007, 0.004),
+    # Plex renders posters uncropped in its grid/details views — no edge
+    # compensation needed. Used by the plex_sync.py companion script.
+    "plex": (0.0, 0.0),
+    # Same story for Jellyfin's web/desktop clients — posters render
+    # uncropped in the library grid and detail views. Used by the
+    # jellyfin_sync.py companion script.
+    "jellyfin": (0.0, 0.0),
 }
 
 
