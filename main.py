@@ -620,6 +620,12 @@ def _detection_vote_ok(vote_count: int | None) -> bool:
 # Per-request configuration
 # ---------------------------------------------------------------------------
 
+_CLIENT_EDGE_INSETS = {
+    "stremio_tv_nuvio": (0.0, 0.0),
+    "stremio_desktop_web": (0.007, 0.004),
+}
+
+
 @dataclass
 class RequestConfig:
     """
@@ -663,7 +669,7 @@ class RequestConfig:
     bar_height_ratio:        float = 0.080
     bar_font_size_ratio:     float = 0.55
     bar_frost_opacity:       float = 0.85
-    bar_bottom_inset:        float = 0.007
+    bar_bottom_inset:        float = 0.0
     bar_style:               str   = "frosted"  # "frosted"|"silver"|"gold"|"rating_black"|"rating_frosted"
     bar_accent:              str   = "silver"   # "silver"|"gold"|"palette_0"|"palette_1"|"palette_2"
     bar_score_out_of_10:     bool  = False
@@ -716,8 +722,7 @@ class RequestConfig:
     sash_badge_style:  str   = "frosted" # "silver" | "gold" | "frosted"
     sash_badge_size_w: float = 1.05      # horizontal scale of badge
     sash_badge_size_h: float = 1.05      # vertical scale of badge
-    sash_badge_notch_offset: float = 0.0   # downward text nudge as fraction of badge height
-    sash_badge_inset: float = 0.007        # top-edge offset as fraction of poster height (± small)
+    sash_badge_inset: float = 0.0          # top-edge offset as fraction of poster height (± small)
     sash_badge_font_ratio:   float = 0.43  # font size as fraction of badge height
     sash_badge_frost_opacity: float = 0.75 # frosted overlay opacity (0.0–1.0)
     sash_length_ratio: float = 1.15  # diagonal sash length as fraction of poster width
@@ -779,6 +784,14 @@ def build_request_config(params: dict) -> RequestConfig:
     """
     cfg = RequestConfig()
 
+    # Client profiles provide defaults only; explicit inset parameters below
+    # remain authoritative for users who fine-tune either edge manually.
+    _client_insets = _CLIENT_EDGE_INSETS.get(
+        (params.get("primary_client") or "").strip().lower()
+    )
+    if _client_insets is not None:
+        cfg.bar_bottom_inset, cfg.sash_badge_inset = _client_insets
+
     def _b(key, default): return _parse_bool(params.get(key), default)
 
     def _f(key, default, lo: float, hi: float):
@@ -831,7 +844,6 @@ def build_request_config(params: dict) -> RequestConfig:
         cfg.sash_mode = "hidden"   # legacy: sashes turned off
     elif "sash_badge" in params:
         cfg.sash_mode = "notch" if cfg.sash_badge else "sash"
-    cfg.sash_badge_notch_offset  = _f("sash_badge_notch_offset",  cfg.sash_badge_notch_offset,  -0.5, 0.5)
     cfg.sash_badge_inset         = _f("sash_badge_inset",         cfg.sash_badge_inset,         -0.02, 0.02)
     cfg.sash_badge_font_ratio    = _f("sash_badge_font_ratio",    cfg.sash_badge_font_ratio,    0.10, 1.0)
     cfg.sash_badge_frost_opacity = _f("sash_badge_frost_opacity", cfg.sash_badge_frost_opacity, 0.0, 1.0)
@@ -1579,7 +1591,6 @@ def build_poster(
                                      size_ratio_w=cfg.sash_badge_size_w,
                                      size_ratio_h=cfg.sash_badge_size_h,
                                      notch_style=cfg.sash_badge_style,
-                                     notch_text_offset=cfg.sash_badge_notch_offset,
                                      notch_inset=cfg.sash_badge_inset,
                                      font_size_ratio=cfg.sash_badge_font_ratio,
                                      frost_opacity=cfg.sash_badge_frost_opacity,

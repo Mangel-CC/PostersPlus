@@ -1312,7 +1312,7 @@ def sample_frosted_notch_rgb(
     size_ratio_w: float = 1.0,
     size_ratio_h: float = 1.0,
     font_size_ratio: float = 0.43,
-    notch_inset: float = 0.007,
+    notch_inset: float = 0.004,
     star: bool | None = None,
 ) -> tuple[float, float, float]:
     """Dominant RGB the frosted notch would sample from its crop region.
@@ -1361,8 +1361,7 @@ def draw_award_badge(
     size_ratio_w: float = 1.0,     # horizontal scale multiplier
     size_ratio_h: float = 1.0,     # vertical scale multiplier
     notch_style: str = "frosted",     # "silver" | "gold" | "frosted"
-    notch_text_offset: float = 0.0,   # downward text nudge as fraction of badge height
-    notch_inset: float = 0.007,        # top-edge offset as fraction of poster height (± small)
+    notch_inset: float = 0.004,        # top-edge offset as fraction of poster height (± small)
     font_size_ratio: float = 0.43,    # font size as fraction of badge height
     frost_opacity: float = 0.75,      # frosted overlay opacity (0.0–1.0)
     tint_rgb: tuple[float, float, float] | None = None,  # override sampled colour (frosted)
@@ -1450,9 +1449,8 @@ def draw_award_badge(
     bx = (width - badge_w) // 2
     by_composite = max(-badge_h, int(height * notch_inset))
 
-    # Text centred in badge with optional downward nudge
-    _notch_nudge = int(badge_h * notch_text_offset) * SS
-    text_cy_ss   = bh / 2 + _notch_nudge
+    # Text is geometrically centred; client-specific placement is handled by inset.
+    text_cy_ss = bh / 2
 
     if notch_style == "frosted":
         # ── Frosted: blurred poster crop tinted toward the region's dominant colour ──
@@ -1571,11 +1569,19 @@ def draw_award_badge(
             ctx.set_source(grad)
             _rrect_notch(0, 0, bw, bh, r_ss)
             ctx.fill()
-            # Trim-colour border stroke (silver or gold)
+            # Open-top trim: sides continue from the poster edge and wrap
+            # around the rounded bottom, but no horizontal line can peek out
+            # when a client crops or rounds the poster top.
             tr_c, tg_c, tb_c = trim_rgb
             ctx.set_source_rgba(tr_c / 255, tg_c / 255, tb_c / 255, border_alpha / 255)
             ctx.set_line_width(bw_ss)
-            _rrect_notch(inset, inset, bw - 2 * inset, bh - 2 * inset, max(1.0, r_ss - inset))
+            trim_r = max(1.0, r_ss - inset)
+            ctx.move_to(inset, 0)
+            ctx.line_to(inset, bh - inset - trim_r)
+            ctx.arc_negative(inset + trim_r, bh - inset - trim_r, trim_r, math.pi, math.pi / 2)
+            ctx.line_to(bw - inset - trim_r, bh - inset)
+            ctx.arc_negative(bw - inset - trim_r, bh - inset - trim_r, trim_r, math.pi / 2, 0)
+            ctx.line_to(bw - inset, 0)
             ctx.stroke()
 
             surface.flush()
@@ -1617,9 +1623,14 @@ def draw_award_badge(
         )
         body.putalpha(body_mask)
         border_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
-        ImageDraw.Draw(border_layer).rounded_rectangle(
+        border_draw = ImageDraw.Draw(border_layer)
+        border_draw.rounded_rectangle(
             [(0, 0), (bw - 1, bh - 1)],
             radius=r_ss, outline=(*trim_rgb, border_alpha), width=bw_ss, **_nc,
+        )
+        # Remove only the horizontal top stroke, retaining both vertical sides.
+        border_draw.rectangle(
+            [(bw_ss, 0), (bw - bw_ss - 1, bw_ss)], fill=(0, 0, 0, 0)
         )
         badge = Image.alpha_composite(body, border_layer)
 

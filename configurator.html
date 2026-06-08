@@ -69,7 +69,7 @@
     z-index: 1;
     width: fit-content;
     min-width: 920px;
-    padding: 0 28px 80px;
+    padding: 0 28px 28px;
   }
 
   /* ── HEADER ── */
@@ -231,14 +231,20 @@
     /* Preview column ~15% wider than the 360px poster so it's a tight frame
        with a small border, not a sea of empty space. */
     grid-template-columns: 430px 414px;
+    grid-template-rows: minmax(0, 1fr);
     gap: 20px;
     align-items: stretch;
+    height: max(680px, calc(100vh - 144px));
+    max-height: max(680px, calc(100vh - 144px));
   }
 
   /* ── PANEL ── */
   .panel { position: relative; }
 
   .left-col {
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     border: 1px solid var(--border);
@@ -247,8 +253,10 @@
 
   .left-col .panel-body {
     flex: 1;
-    overflow-y: auto;
-    max-height: calc(100vh - 180px);
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     overscroll-behavior: contain;
     scrollbar-width: none !important;
     scrollbar-color: var(--black4) transparent;
@@ -333,9 +341,11 @@
     text-transform: uppercase;
   }
 
-  /* Section host — JS locks its height to the Core tab; taller tabs scroll
-     within it so the panel (and the matched preview) keep a constant size. */
+  /* The host fills the fixed-height panel. Each tab scrolls inside this same
+     viewport, so switching categories never changes the panel dimensions. */
   #tab-host {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     scrollbar-width: none;
   }
@@ -454,12 +464,13 @@
     width: 100%;
     background: var(--black2);
     border: 1px solid var(--border);
+    border-radius: 0;
     color: var(--text-primary);
     font-family: var(--mono);
     font-size: 12px;
     padding: 8px 11px;
     outline: none;
-    transition: border-color 0.15s, background 0.15s;
+    transition: border-color 0.15s, background-color 0.15s;
     appearance: none;
     -webkit-appearance: none;
   }
@@ -468,7 +479,7 @@
   input[type="number"]:focus,
   select:focus {
     border-color: var(--gold-dim);
-    background: var(--black3);
+    background-color: var(--black3);
     box-shadow: inset 0 0 0 1px rgba(201,168,76,0.08);
   }
 
@@ -986,6 +997,9 @@
 
   /* ── RIGHT COLUMN ── */
   .right-col {
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
     position: sticky;
     top: 0;
     display: flex;
@@ -1002,6 +1016,8 @@
     display: flex;
     flex-direction: column;
     flex: 1;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .preview-frame {
@@ -1009,7 +1025,8 @@
     align-items: center;
     justify-content: center;
     padding: 20px;
-    height: 580px;
+    flex: 1;
+    min-height: 420px;
     position: relative;
     background: var(--black);
   }
@@ -1039,9 +1056,6 @@
     display: block;
     transition: opacity 0.25s ease;
     border-radius: 12px;
-    /* Simulate Stremio's ~0.9% top/bottom crop so inset elements appear as
-       they will in the client. round 12px preserves the corner rounding. */
-    clip-path: inset(0.9% 0 0.9% 0 round 12px);
   }
 
   .preview-empty {
@@ -1079,10 +1093,16 @@
     font-size: 9px;
     color: var(--text-muted);
     letter-spacing: 0.12em;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    justify-content: center;
+    justify-content: space-between;
     background: var(--black2);
+  }
+  .preview-meta-items {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    min-width: 0;
   }
 
   .meta-item span { color: var(--silver-dim); }
@@ -1362,32 +1382,72 @@
   }
 
 
-  /* Let the controls column absorb the panel's spare height and the log line
-     fill it, so the status text sits centred in the empty space below the
-     buttons rather than hugging the top of it. */
+  /* The preview is height-matched to the configurator. Treat its lower area as
+     useful instrument space instead of vertically centring one status line. */
   .preview-controls {
     display: flex;
     flex-direction: column;
-    flex: 1;
-  }
-  .log-line {
-    font-size: 9px;
-    color: var(--text-muted);
-    padding: 7px 16px;
-    border-top: 1px solid var(--border);
-    letter-spacing: 0.06em;
+    flex: 0 0 auto;
     background: var(--black2);
-    overflow-wrap: break-word;
-    word-break: break-word;
-    white-space: normal;
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
   }
 
+  .preview-console {
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    background: var(--black2);
+  }
+  .console-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .console-action {
+    width: 27px;
+    height: 27px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+    opacity: 0.72;
+    transition: opacity 0.15s, background 0.15s, box-shadow 0.15s;
+  }
+  .console-action:hover { opacity: 1; }
+  .console-action svg { width: 13px; height: 13px; }
+  .console-action-copy { color: var(--gold); }
+  .console-action-copy:hover { background: var(--gold-faint); box-shadow: 0 0 10px var(--gold-glow); }
+  .console-action-load { color: var(--silver); }
+  .console-action-load:hover { background: var(--silver-faint); }
+  .console-action-reset { color: #b04a44; }
+  .console-action-reset:hover { background: #1d0f0e; }
+  .log-line {
+    font-size: 9px;
+    line-height: 1.65;
+    color: var(--text-muted);
+    min-height: calc(2 * 1.65em + 12px);
+    padding: 6px 14px 6px 30px;
+    letter-spacing: 0.05em;
+    overflow: hidden;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-box-pack: center;
+    -webkit-line-clamp: 2;
+    position: relative;
+  }
+  .log-line::before {
+    content: ">";
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--gold-dim);
+  }
   .log-line.ok  { color: var(--gold-dim); }
-  .log-line.err { color: #9a3030; }
+  .log-line.err { color: #b04a44; }
   .log-line.info{ color: var(--silver-dim); }
 
   /* ── MISC ── */
@@ -1412,9 +1472,10 @@
     html, body { width: 100%; overflow-x: hidden; }
     body { align-items: stretch; }
     .shell { min-width: 0; width: 100%; padding: 0 12px 80px; }
-    .main-layout { grid-template-columns: 1fr; width: 100%; gap: 16px; align-items: start; }
-    .left-col .panel-body { max-height: none; overflow: visible; scrollbar-width:none}
-    .right-col { position: static; }
+    .main-layout { grid-template-columns: 1fr; grid-template-rows: auto; width: 100%; height: auto; max-height: none; gap: 16px; align-items: start; }
+    .left-col { height: auto; overflow: visible; }
+    .left-col .panel-body { overflow: visible; scrollbar-width:none}
+    .right-col { height: auto; overflow: visible; position: static; }
     .preview-panel { width: 100%; }
     .preview-frame { height: auto; min-height: 240px; padding: 12px; }
     .preview-poster { width: 100%; height: auto; max-height: 70vh; object-fit: contain; }
@@ -1657,6 +1718,14 @@
               </div>
               <input type="text" id="cfg-mdblist-key" placeholder="If blank uses server key." oninput="build(); queuePreviewReload(); saveApiKeys()">
               <div class="field-hint" id="mdblist-key-hint" style="display:none"></div>
+            </div>
+            <div class="field">
+              <label class="field-label">Primary Client</label>
+              <select id="cfg-primary-client" onchange="onPrimaryClientChange()">
+                <option value="stremio_tv_nuvio" selected>Stremio TV, Nuvio</option>
+                <option value="stremio_desktop_web">Stremio Desktop/Web</option>
+              </select>
+              <div class="field-hint">Sets recommended bar and notch insets. Both remain manually adjustable.</div>
             </div>
             <div class="field">
               <label class="field-label">User Native Language</label>
@@ -1936,8 +2005,8 @@
               <div class="field">
                 <label class="field-label">Inset from Bottom</label>
                 <div class="range-row">
-                  <input type="range" id="cfg-bar-inset" min="0.0" max="0.020" step="0.001" value="0.007" oninput="updateRange(this,'rng-bi5'); build(); queuePreviewReload()">
-                  <span class="range-val" id="rng-bi5">0.007</span>
+                  <input type="range" id="cfg-bar-inset" min="0.0" max="0.020" step="0.001" value="0.000" oninput="updateRange(this,'rng-bi5'); build(); queuePreviewReload()">
+                  <span class="range-val" id="rng-bi5">0.000</span>
                 </div>
               </div>
             </div>
@@ -2115,16 +2184,8 @@
                 <label class="field-label">Inset</label>
                 <div class="field-hint" style="margin-bottom:4px;">Adjust as required for your client, won't match preview.</div>
                 <div class="range-row">
-                  <input type="range" id="cfg-sash-badge-inset" min="-0.020" max="0.020" step="0.001" value="0.007" oninput="updateRange(this,'rng-sbi'); build(); queuePreviewReload()">
-                  <span class="range-val" id="rng-sbi">0.007</span>
-                </div>
-              </div>
-              <div class="field">
-                <label class="field-label">Text Position</label>
-                <div class="field-hint" style="margin-bottom:4px;">Adjust as required for your client, tweak inset first.</div>
-                <div class="range-row">
-                  <input type="range" id="cfg-sash-badge-notch-offset" min="-0.5" max="0.5" step="0.01" value="0.00" oninput="updateRange(this,'rng-sbno'); build(); queuePreviewReload()">
-                  <span class="range-val" id="rng-sbno">0.00</span>
+                  <input type="range" id="cfg-sash-badge-inset" min="-0.020" max="0.020" step="0.001" value="0.000" oninput="updateRange(this,'rng-sbi'); build(); queuePreviewReload()">
+                  <span class="range-val" id="rng-sbi">0.000</span>
                 </div>
               </div>
               <div class="field">
@@ -2313,7 +2374,7 @@
         <div class="notch"></div>
         <div class="panel-header">
           <span class="panel-title">Live Preview</span>
-          <span class="panel-index" id="preview-status">IDLE</span>
+          <span class="panel-index" id="preview-status" hidden>IDLE</span>
         </div>
         <div class="preview-frame" id="preview-frame">
           <div class="preview-empty" id="preview-empty">
@@ -2322,22 +2383,32 @@
           </div>
         </div>
         <div class="preview-meta">
-          <span class="meta-item">IMDB: <span id="meta-imdb">—</span></span>
-          <span class="meta-item">TMDB: <span id="meta-tmdb">—</span></span>
-          <span class="meta-item">TYPE: <span id="meta-type">—</span></span>
+          <div class="preview-meta-items">
+            <span class="meta-item">IMDB: <span id="meta-imdb">—</span></span>
+            <span class="meta-item">TMDB: <span id="meta-tmdb">—</span></span>
+            <span class="meta-item">TYPE: <span id="meta-type">—</span></span>
+          </div>
+          <div class="console-actions">
+            <button class="console-action console-action-copy" onclick="copyUrl()" title="Copy URL" aria-label="Copy URL">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg>
+            </button>
+            <button class="console-action console-action-load" onclick="openPresetModal()" title="Load Preset" aria-label="Load Preset">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6l2 2h8v12H4z"/><path d="M12 10v6M9 13h6"/></svg>
+            </button>
+            <button class="console-action console-action-reset" onclick="resetDefaults(); build(); queuePreviewReload(); saveApiKeys()" title="Reset" aria-label="Reset">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v6h6"/><path d="M5.5 15a8 8 0 1 0 1-8.5L4 10"/></svg>
+            </button>
+          </div>
         </div>
         <div class="preview-controls">
-          <div class="btn-row">
-            <button class="btn btn-preview" onclick="copyUrl()">Copy URL</button>
-            <button class="btn btn-primary" onclick="openPresetModal()">Load Preset</button>
-            <button class="btn btn-reset" onclick="resetDefaults(); build(); queuePreviewReload(); saveApiKeys()">Reset</button>
-          </div>
           <div id="url-display-row">
             <input type="text" id="url-display-input" readonly
                    onclick="this.select()"
                    title="Click to select all, then Ctrl+C to copy">
           </div>
-          <div class="log-line" id="preview-log">ready.</div>
+          <div class="preview-console">
+            <div class="log-line" id="preview-log">ready.</div>
+          </div>
         </div>
       </div>
     </div>
@@ -2385,6 +2456,23 @@ const SOURCE_LABELS = {
 };
 const DEFAULT_MOVIE_W = {letterboxd:0.99,trakt:0.01,tomatoes:0,popcorn:0,imdb:0,metacritic:0,metacriticuser:0,tmdb:0,rogerebert:0,myanimelist:0};
 const DEFAULT_TV_W    = {trakt:0.8,tomatoes:0.2,popcorn:0,imdb:0,metacritic:0,metacriticuser:0,tmdb:0,myanimelist:0};
+
+const CLIENT_INSETS = {
+  stremio_tv_nuvio:    { bar: 0.000, notch: 0.000 },
+  stremio_desktop_web: { bar: 0.007, notch: 0.004 },
+};
+
+function onPrimaryClientChange({ rebuild = true } = {}) {
+  const profile = CLIENT_INSETS[vEl("cfg-primary-client")] || CLIENT_INSETS.stremio_desktop_web;
+  const bar = document.getElementById("cfg-bar-inset");
+  const notch = document.getElementById("cfg-sash-badge-inset");
+  bar.value = profile.bar.toFixed(3);
+  notch.value = profile.notch.toFixed(3);
+  updateRange(bar, "rng-bi5");
+  updateRange(notch, "rng-sbi");
+  saveApiKeys();
+  if (rebuild) { build(); queuePreviewReload(); }
+}
 
 const TMDB_IMG = 'https://image.tmdb.org/t/p/w92';
 
@@ -2501,37 +2589,8 @@ function showTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.tab === tab);
   });
-  const body = document.querySelector('.left-col .panel-body');
-  if (body) body.scrollTop = 0;
-}
-
-// Lock the section host to the CORE tab's height so switching tabs (and the
-// height-matched preview) never resizes.  Core is the reference size: shorter
-// tabs simply leave a little space, taller tabs scroll inside the host.
-// Recomputed on resize / zoom since both can change the measured height.
-let _lockTabHeightRAF = null;
-function _lockTabHeight() {
   const host = document.getElementById('tab-host');
-  if (!host) return;
-  const active = document.querySelector('.tab-btn.active')?.dataset.tab || 'core';
-  host.style.height = 'auto';
-  // Measure the Core tab (use scrollHeight + a small buffer so sub-pixel
-  // rounding at non-100% zoom doesn't leave Core a hair short and scrolling).
-  document.querySelectorAll('.section').forEach(s => {
-    s.style.display = (s.dataset.tab === 'core') ? '' : 'none';
-  });
-  const coreH = Math.ceil(host.scrollHeight) + 2;
-  host.style.height = coreH + 'px';
-  showTab(active);   // restore the tab the user was on
-}
-function _scheduleLockTabHeight() {
-  if (_lockTabHeightRAF) cancelAnimationFrame(_lockTabHeightRAF);
-  _lockTabHeightRAF = requestAnimationFrame(_lockTabHeight);
-}
-window.addEventListener('resize', _scheduleLockTabHeight);
-// Browser/pinch zoom fires on visualViewport rather than window in some browsers.
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', _scheduleLockTabHeight);
+  if (host) host.scrollTop = 0;
 }
 
 function updateRange(el, outId) {
@@ -2944,6 +3003,7 @@ function saveApiKeys() {
   localStorage.setItem('postersplus_tmdb_key',    vEl('cfg-tmdb-key'));
   localStorage.setItem('postersplus_mdblist_key', vEl('cfg-mdblist-key'));
   localStorage.setItem('postersplus_language', vEl('cfg-language'));
+  localStorage.setItem('postersplus_primary_client', vEl('cfg-primary-client'));
 }
 
 function saveSelection(data) { localStorage.setItem('postersplus_selection', JSON.stringify(data)); }
@@ -2962,7 +3022,9 @@ function hydrateFromLocalStorage() {
   const tmdb = localStorage.getItem('postersplus_tmdb_key');
   const mdbl = localStorage.getItem('postersplus_mdblist_key');
   const lang = localStorage.getItem('postersplus_language');
+  const client = localStorage.getItem('postersplus_primary_client');
   if (lang) document.getElementById('cfg-language').value = lang;
+  if (client && CLIENT_INSETS[client]) document.getElementById('cfg-primary-client').value = client;
   if (tmdb) document.getElementById('cfg-tmdb-key').value = tmdb;
   if (mdbl) document.getElementById('cfg-mdblist-key').value = mdbl;
   try {
@@ -3266,6 +3328,7 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
   params.set('tmdb_id', tmdbId);
   params.set('imdb_id', imdbId);
   params.set('type',    type);
+  params.set('primary_client', vEl('cfg-primary-client') || 'stremio_desktop_web');
   if (accKey)         params.set('access_key',  accKey);
   if (userTmdbKey)    params.set('tmdb_key',     usePlaceholders ? '{tmdb_key}'    : userTmdbKey);
   if (userMdblistKey) params.set('mdblist_key',  usePlaceholders ? '{mdblist_key}' : userMdblistKey);
@@ -3340,7 +3403,6 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
       params.set('sash_badge_size_w',        n('cfg-sash-badge-size-w').toFixed(2));
       params.set('sash_badge_size_h',        n('cfg-sash-badge-size-h').toFixed(2));
       params.set('sash_badge_inset',         n('cfg-sash-badge-inset').toFixed(3));
-      params.set('sash_badge_notch_offset',  n('cfg-sash-badge-notch-offset').toFixed(2));
       params.set('sash_badge_font_ratio',    n('cfg-sash-badge-font-ratio').toFixed(2));
       if (vEl('cfg-sash-badge-style') === 'frosted')
         params.set('sash_badge_frost_opacity', n('cfg-sash-badge-frost-opacity').toFixed(2));
@@ -3413,7 +3475,7 @@ async function copyUrl() {
 function resetDefaults() {
   // Core Config is preserved across a Reset: API keys, language and the
   // searched title / selection (domain is server-derived, not user-set here).
-  const preserve = new Set(['cfg-tmdb-key','cfg-mdblist-key','cfg-access-key','cfg-domain','cfg-search-query','cfg-language']);
+  const preserve = new Set(['cfg-tmdb-key','cfg-mdblist-key','cfg-access-key','cfg-domain','cfg-search-query','cfg-language','cfg-primary-client']);
   // Drop any persisted settings so a later reload starts from the reset state.
   try { localStorage.removeItem(SETTINGS_KEY); } catch (e) {}
   // Reset both cfg-* (inputs / selects) AND tog-* (toggle checkboxes).  The
@@ -3430,6 +3492,7 @@ function resetDefaults() {
     if (el.type === 'hidden')   el.value   = el.defaultValue || '';
     if (el.tagName === 'SELECT') { for (const opt of el.options) opt.selected = opt.defaultSelected; }
   });
+  onPrimaryClientChange({ rebuild: false });
   buildWeightSection('movie-weights', MOVIE_SOURCES, DEFAULT_MOVIE_W);
   buildWeightSection('tv-weights',    TV_SOURCES,    DEFAULT_TV_W);
   sashOrder    = SASH_SLOTS.filter(s => !SASH_DEFAULT_DISABLED.has(s.id)).map(s => s.id);
@@ -3482,7 +3545,7 @@ async function loadPreview() {
     const img = new Image();
     img.onload = () => {
       existingImg.src = img.src; existingImg.style.opacity = '1';
-      setLog('preview-log', `Preview successfully loaded. Click copy URL when you've finished configuring.`, 'ok');
+      setLog('preview-log', `Click the gold button to copy URL, silver to load a preset, red to reset.`, 'ok');
       document.getElementById('preview-status').textContent = 'OK';
       previewLoading = false;
     };
@@ -3497,7 +3560,7 @@ async function loadPreview() {
     const img = new Image();
     img.onload = () => {
       frame.innerHTML = ''; img.className = 'preview-poster'; frame.appendChild(img);
-      setLog('preview-log', `Preview successfully loaded. Click copy URL when you've finished configuring.`, 'ok');
+      setLog('preview-log', `Click the gold button to copy URL, silver to load a preset, red to reset.`, 'ok');
       document.getElementById('preview-status').textContent = 'OK';
       previewLoading = false;
     };
@@ -3596,8 +3659,8 @@ const _INFO_TITLES = {
 // Preset system
 // ---------------------------------------------------------------------------
 // Each preset stores only the URL query params so it works with any server.
-// `loadPreset` calls importUrl with settingsOnly so the user's API keys,
-// domain, and currently selected title are preserved.
+// `loadPreset` preserves Core Config, the current title, and the two
+// client-specific inset sliders while applying the visual preset.
 
 const PRESETS = [
   {
@@ -3612,7 +3675,7 @@ const PRESETS = [
     name: 'Light Rating Bar',
     description: 'Featuring a score bar using a light score palette of red, yellow, green and purple. Info is displayed as a frosted notch at the top of the poster.',
     screenshot: '/static/presets/light_rating_bar.jpg',
-    params: 'top_gradient=medium&bottom_gradient=high&rating_display_mode=1&score_color_mode=0&accent_bar_font_size_ratio=0.080&accent_bar_y_offset=0.90&accent_bar_append_mode=0&accent_bar_bottom_ratio=0.040&score_glow_threshold=85&score_glow_blur=1&score_glow_alpha=40&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=false&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=true&sash_badge=true&sash_badge_style=frosted&sash_badge_size_w=1.40&sash_badge_size_h=1.20&sash_badge_inset=0.007&sash_badge_notch_offset=0.00&sash_badge_font_ratio=0.43&sash_badge_frost_opacity=0.75&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0&cinema_greyscale=true&release_status_cinema_only=true',
+    params: 'top_gradient=medium&bottom_gradient=high&rating_display_mode=1&score_color_mode=0&accent_bar_font_size_ratio=0.080&accent_bar_y_offset=0.90&accent_bar_append_mode=0&accent_bar_bottom_ratio=0.040&score_glow_threshold=85&score_glow_blur=1&score_glow_alpha=40&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=false&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=true&sash_badge=true&sash_badge_style=frosted&sash_badge_size_w=1.40&sash_badge_size_h=1.20&sash_badge_font_ratio=0.43&sash_badge_frost_opacity=0.75&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0&cinema_greyscale=true&release_status_cinema_only=true',
   },
   {
     id: 'clean_sash',
@@ -3626,7 +3689,7 @@ const PRESETS = [
     name: 'Clean Notch',
     description: 'Genre and rating at the bottom in text, with a frosted notch at the top.',
     screenshot: '/static/presets/clean_notch.jpg',
-    params: 'top_gradient=medium&bottom_gradient=high&rating_display_mode=2&numeric_score_font_size_ratio=0.100&numeric_score_y_offset=0.90&score_out_of_10=false&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=false&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=true&sash_badge=true&sash_badge_style=frosted&sash_badge_size_w=1.40&sash_badge_size_h=1.20&sash_badge_inset=0.007&sash_badge_notch_offset=0.00&sash_badge_font_ratio=0.43&sash_badge_frost_opacity=0.75&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0&cinema_greyscale=true&release_status_cinema_only=true',
+    params: 'top_gradient=medium&bottom_gradient=high&rating_display_mode=2&numeric_score_font_size_ratio=0.100&numeric_score_y_offset=0.90&score_out_of_10=false&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=false&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=true&sash_badge=true&sash_badge_style=frosted&sash_badge_size_w=1.40&sash_badge_size_h=1.20&sash_badge_font_ratio=0.43&sash_badge_frost_opacity=0.75&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0&cinema_greyscale=true&release_status_cinema_only=true',
   },  
   {
     id: 'mini',
@@ -3640,28 +3703,28 @@ const PRESETS = [
     name: 'Frosted',
     description: 'Both the bar and notch will reflect the poster\'s color, resulting in some beautifully colorful designs. Maintains a low footprint to show off as much of the art as possible.',
     screenshot: '/static/presets/frosted_notch.jpg',
-    params: 'top_gradient=medium&bottom_gradient=high&rating_display_mode=4&bar_style=frosted&bar_append=rating_year&bar_score_out_of_10=false&bar_match_notch=true&bar_height_ratio=0.080&bar_font_size_ratio=0.55&bar_frost_opacity=0.85&bar_bottom_inset=0.007&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=false&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=true&cinema_greyscale=true&release_status_cinema_only=true&sash_badge=true&sash_badge_style=frosted&sash_badge_size_w=1.40&sash_badge_size_h=1.20&sash_badge_inset=0.007&sash_badge_notch_offset=0.00&sash_badge_font_ratio=0.43&sash_badge_frost_opacity=0.75&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0',
+    params: 'top_gradient=medium&bottom_gradient=high&rating_display_mode=4&bar_style=frosted&bar_append=rating_year&bar_score_out_of_10=false&bar_match_notch=true&bar_height_ratio=0.080&bar_font_size_ratio=0.55&bar_frost_opacity=0.85&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=false&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=true&cinema_greyscale=true&release_status_cinema_only=true&sash_badge=true&sash_badge_style=frosted&sash_badge_size_w=1.40&sash_badge_size_h=1.20&sash_badge_font_ratio=0.43&sash_badge_frost_opacity=0.75&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0',
   },
   {
     id: 'black_rating_bar_light_notch',
     name: 'Black Rating Bar',
     description: 'A black bar displaying genre, rating and year with an adaptive rating bar that uses red, yellow, green and purple.',
     screenshot: '/static/presets/black_rating_bar_light_notch.jpg',
-    params: 'top_gradient=medium&bottom_gradient=high&rating_display_mode=4&bar_style=rating_black&bar_accent=palette_0&bar_append=rating_year&bar_score_out_of_10=false&bar_height_ratio=0.080&bar_font_size_ratio=0.55&bar_frost_opacity=0.85&bar_bottom_inset=0.007&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=false&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=true&sash_badge=true&sash_badge_style=frosted&sash_badge_size_w=1.40&sash_badge_size_h=1.20&sash_badge_inset=0.007&sash_badge_notch_offset=0.00&sash_badge_font_ratio=0.43&sash_badge_frost_opacity=0.75&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0&cinema_greyscale=true&release_status_cinema_only=true',
+    params: 'top_gradient=medium&bottom_gradient=high&rating_display_mode=4&bar_style=rating_black&bar_accent=palette_0&bar_append=rating_year&bar_score_out_of_10=false&bar_height_ratio=0.080&bar_font_size_ratio=0.55&bar_frost_opacity=0.85&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=false&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=true&sash_badge=true&sash_badge_style=frosted&sash_badge_size_w=1.40&sash_badge_size_h=1.20&sash_badge_font_ratio=0.43&sash_badge_frost_opacity=0.75&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0&cinema_greyscale=true&release_status_cinema_only=true',
   },
   {
     id: 'black_rating_bar_oa',
     name: 'Black Rating Bar OA',
     description: 'Black rating bar that swaps between red, yellow, green and purple based on score. Ideal preset if you enjoy the original art, rather than textless with a logo overlay. Uses very low vignette for maximum brightness.',
     screenshot: '/static/presets/black_rating_bar_oa.jpg',
-    params: 'top_gradient=off&bottom_gradient=low&rating_display_mode=4&bar_style=rating_black&bar_accent=palette_0&bar_append=rating_year&bar_score_out_of_10=false&bar_height_ratio=0.080&bar_font_size_ratio=0.55&bar_frost_opacity=0.85&bar_bottom_inset=0.007&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=true&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=true&sash_badge=false&muted=false&sash_length_ratio=1.15&sash_height_ratio=0.120&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0&cinema_greyscale=true&release_status_cinema_only=true',
+    params: 'top_gradient=off&bottom_gradient=low&rating_display_mode=4&bar_style=rating_black&bar_accent=palette_0&bar_append=rating_year&bar_score_out_of_10=false&bar_height_ratio=0.080&bar_font_size_ratio=0.55&bar_frost_opacity=0.85&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=true&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=true&sash_badge=false&muted=false&sash_length_ratio=1.15&sash_height_ratio=0.120&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0&cinema_greyscale=true&release_status_cinema_only=true',
   },
   {
     id: 'frosted_rating_bar_oa',
     name: 'Frosted Rating Bar OA',
     description: 'Frosted bar with a silver rating accent bar. Displays the genre, info sash and rating in one place while taking up the least amount of space. Uses the original art with very low vignette for maximum brightness.',
     screenshot: '/static/presets/frosted_rating_bar_oa.jpg',
-    params: 'top_gradient=off&bottom_gradient=low&rating_display_mode=4&bar_style=rating_frosted&bar_accent=silver&bar_append=sash&bar_score_out_of_10=false&bar_height_ratio=0.080&bar_font_size_ratio=0.55&bar_frost_opacity=0.85&bar_bottom_inset=0.007&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=true&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=false&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0&cinema_greyscale=true&release_status_cinema_only=true',
+    params: 'top_gradient=off&bottom_gradient=low&rating_display_mode=4&bar_style=rating_frosted&bar_accent=silver&bar_append=sash&bar_score_out_of_10=false&bar_height_ratio=0.080&bar_font_size_ratio=0.55&bar_frost_opacity=0.85&movie_weights=letterboxd%3A0.99%2Ctrakt%3A0.01%2Ctomatoes%3A0.00%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Crogerebert%3A0.00%2Cmyanimelist%3A0.00&tv_weights=trakt%3A0.80%2Ctomatoes%3A0.20%2Cpopcorn%3A0.00%2Cimdb%3A0.00%2Cmetacritic%3A0.00%2Cmetacriticuser%3A0.00%2Ctmdb%3A0.00%2Cmyanimelist%3A0.00&textless=false&use_original_art=true&original_art_source=primary&logo_language=en&logo_priority=native_original&fallback_bg_style=photoreal&logo_max_w_ratio=0.75&logo_max_h_ratio=0.25&logo_bottom_ratio=0.28&show_award_sash=false&sash_priority=wins%2Cgg_wins%2Cfestival%2Cpic_noms%2Cgg_noms%2Cstudio%2Cdirector%2Ccast%2Ctrending%2Ccult%2Cforeign%2Cnew_release%2Cmetacritic%2Ctrue_story%2Cstructural%2Crelease_status&badge_display_mode=0&cinema_greyscale=true&release_status_cinema_only=true',
   },
   {
     id: 'mini_oa',
@@ -3726,7 +3789,7 @@ function loadPreset(id) {
   if (!preset) return;
   const domain = (vEl('cfg-domain') || window.location.origin).replace(/\/$/, '');
   const url = `${domain}/poster?tmdb_id=%7Btmdb_id%7D&imdb_id=%7Bimdb_id%7D&type=%7Btype%7D&${preset.params}`;
-  importUrl(url, { settingsOnly: true });
+  importUrl(url, { settingsOnly: true, preserveClientInsets: true });
   closePresetModal();
   setLog('preview-log', `Preset "${preset.name}" loaded.`, 'ok');
 }
@@ -3791,7 +3854,7 @@ function _setEl(id, value) {
   }
 }
 
-function importUrl(urlStr, { silent = false, settingsOnly = false } = {}) {
+function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClientInsets = false } = {}) {
   let parsed;
   try { parsed = new URL(urlStr); } catch {
     if (!silent) setLog('preview-log', 'Import failed — not a valid URL.', 'err');
@@ -3813,6 +3876,10 @@ function importUrl(urlStr, { silent = false, settingsOnly = false } = {}) {
     // ── Domain & auth ──────────────────────────────────────────────────────
     document.getElementById('cfg-domain').value = parsed.origin;
     if (p.has('access_key'))  document.getElementById('cfg-access-key').value = p.get('access_key');
+    if (p.has('primary_client') && CLIENT_INSETS[p.get('primary_client')]) {
+      _setEl('cfg-primary-client', p.get('primary_client'));
+      onPrimaryClientChange({ rebuild: false });
+    }
 
     // Only import API keys if they are real values (not placeholder tokens)
     const tmdbKey  = p.get('tmdb_key')    || '';
@@ -3866,8 +3933,7 @@ function importUrl(urlStr, { silent = false, settingsOnly = false } = {}) {
   if (p.has('sash_badge_style'))         _setEl('cfg-sash-badge-style',        p.get('sash_badge_style'));
   if (p.has('sash_badge_size_w'))        _setEl('cfg-sash-badge-size-w',       p.get('sash_badge_size_w'));
   if (p.has('sash_badge_size_h'))        _setEl('cfg-sash-badge-size-h',       p.get('sash_badge_size_h'));
-  if (p.has('sash_badge_inset'))         _setEl('cfg-sash-badge-inset',        p.get('sash_badge_inset'));
-  if (p.has('sash_badge_notch_offset'))  _setEl('cfg-sash-badge-notch-offset',  p.get('sash_badge_notch_offset'));
+  if (!preserveClientInsets && p.has('sash_badge_inset')) _setEl('cfg-sash-badge-inset', p.get('sash_badge_inset'));
   if (p.has('sash_badge_font_ratio'))    _setEl('cfg-sash-badge-font-ratio',    p.get('sash_badge_font_ratio'));
   if (p.has('sash_badge_frost_opacity')) _setEl('cfg-sash-badge-frost-opacity', p.get('sash_badge_frost_opacity'));
   if (p.has('sash_length_ratio')) _setEl('cfg-sash-length',      p.get('sash_length_ratio'));
@@ -3910,7 +3976,7 @@ function importUrl(urlStr, { silent = false, settingsOnly = false } = {}) {
   if (p.has('bar_height_ratio'))    _setEl('cfg-bar-height', p.get('bar_height_ratio'));
   if (p.has('bar_font_size_ratio')) _setEl('cfg-bar-font',   p.get('bar_font_size_ratio'));
   if (p.has('bar_frost_opacity'))   _setEl('cfg-bar-frost',  p.get('bar_frost_opacity'));
-  if (p.has('bar_bottom_inset'))    _setEl('cfg-bar-inset',  p.get('bar_bottom_inset'));
+  if (!preserveClientInsets && p.has('bar_bottom_inset')) _setEl('cfg-bar-inset', p.get('bar_bottom_inset'));
   if (p.has('score_glow_threshold'))           _setEl('cfg-glow-thresh',  p.get('score_glow_threshold'));
   if (p.has('score_glow_blur'))                _setEl('cfg-glow-blur',    p.get('score_glow_blur'));
   if (p.has('score_glow_alpha'))               _setEl('cfg-glow-alpha',   p.get('score_glow_alpha'));
@@ -3973,7 +4039,7 @@ function importUrl(urlStr, { silent = false, settingsOnly = false } = {}) {
 // separately and deliberately excluded here so Reset can clear settings without
 // disturbing it.
 const SETTINGS_KEY  = 'postersplus_settings';
-const _CORE_PARAMS  = ['tmdb_id','imdb_id','type','access_key','tmdb_key','mdblist_key','logo_language'];
+const _CORE_PARAMS  = ['tmdb_id','imdb_id','type','access_key','tmdb_key','mdblist_key','logo_language','primary_client'];
 let   _settingsReady = false;   // gate saves until the initial hydrate finishes
 
 function saveSettings() {
@@ -4052,7 +4118,6 @@ build();
 // Hydrate is complete — from here on every build() persists settings.
 _settingsReady = true;
 // Lock tab height after layout settles (fonts/images can shift it slightly).
-requestAnimationFrame(_lockTabHeight);
 
 fetchServerCaps().then(() => { queuePreviewReload(); });
 
