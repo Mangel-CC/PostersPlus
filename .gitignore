@@ -30,3 +30,9 @@ Thumbs.db
 
 # Claude Code local state (machine-specific permissions)
 .claude/
+
+# ElfHosted fork: local runtime artifacts (caches, prometheus multiproc, sqlite)
+.local-cache/
+postersplus-prom/
+*.db
+cache.db*

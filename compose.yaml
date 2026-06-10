@@ -31,6 +31,26 @@ services:
       - COMPOSITE_CACHE_TTL=${COMPOSITE_CACHE_TTL:-604800}
       - COMPOSITE_MAX_ENTRIES=${COMPOSITE_MAX_ENTRIES:-0}
       - DEFAULT_LOGO_LANGUAGE=${DEFAULT_LOGO_LANGUAGE:-en}
+      # --- ElfHosted fork: hosted-mode backends (all opt-in; unset = upstream) ---
+      # Postgres / Redis / S3 backends. Leave unset for SQLite + in-process +
+      # local FS. See .env / .env.example for the commented postgres/redis/minio
+      # sidecar recipes and full descriptions.
+      - DATABASE_URL=${DATABASE_URL:-}
+      - REDIS_URL=${REDIS_URL:-}
+      - OBJECT_STORE_URL=${OBJECT_STORE_URL:-}
+      - OBJECT_STORE_PUBLIC_URL=${OBJECT_STORE_PUBLIC_URL:-}
+      # Static-preset moat + observability + limits.
+      - PRESET_ENABLED=${PRESET_ENABLED:-}
+      - PRESET_CDN_CACHE_TTL=${PRESET_CDN_CACHE_TTL:-86400}
+      - ANONYMOUS_TMDB_RPS=${ANONYMOUS_TMDB_RPS:-5}
+      - RATE_LIMIT_RPS=${RATE_LIMIT_RPS:-0}
+      - RENDER_CONCURRENCY=${RENDER_CONCURRENCY:-0}
+      - RENDER_QUEUE_TIMEOUT=${RENDER_QUEUE_TIMEOUT:-30}
+      - METRICS_ACCESS_KEY=${METRICS_ACCESS_KEY:-}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+    # The image runs as uid/gid 568. On a fresh host volume, chown the cache
+    # dir to 568 before first `up` (mkdir -p postersplus-cache && sudo chown
+    # 568:568 postersplus-cache), or run this service with `user: "568:568"`.
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
