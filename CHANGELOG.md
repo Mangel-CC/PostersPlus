@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0-elf.4](https://github.com/elfhosted/PostersPlus/compare/v1.1.0-elf.3...v1.1.0-elf.4) (2026-06-10)
+
+
+### Bug Fixes
+
+* clean preset-only public lock view ([edfc9a4](https://github.com/elfhosted/PostersPlus/commit/edfc9a43609164d2d51f3918a7710c96c3b3c494))
+* clean preset-only public lock view (v1.1.0-elf.4) ([942ecaf](https://github.com/elfhosted/PostersPlus/commit/942ecaf045c02773d268b6777ebb1aa922d5a37b))
+
 ## [1.1.0-elf.3](https://github.com/elfhosted/PostersPlus/compare/v1.1.0-elf.2...v1.1.0-elf.3) (2026-06-10)
 
 
