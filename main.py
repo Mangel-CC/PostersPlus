@@ -2195,6 +2195,20 @@ async def metrics_endpoint(access_key: str = ""):
     return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
 
 
+@app.api_route("/llms.txt", methods=["GET", "HEAD"], response_class=Response)
+async def get_llms_txt():
+    """llmstxt.org convention (ElfHosted fork) — serve the LLM-readable site
+    summary at /llms.txt. The file lives under static/ for editability but must
+    be reachable at the root path per the spec. HEAD is supported so crawlers
+    that probe before fetching don't get a 405."""
+    path = os.path.join(BASE_DIR, "static", "llms.txt")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return Response(content=f.read(), media_type="text/markdown")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="llms.txt not found")
+
+
 @app.get("/stats")
 async def stats(access_key: str = ""):
     """
