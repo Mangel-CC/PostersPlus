@@ -501,12 +501,15 @@ from cache import (
     get_cached_text_detection,
     set_cached_text_detection,
     init_db,
+    close as close_db,
+    BACKEND_KIND as _STORAGE_KIND,
     is_digital_release,
     set_cached_rating,
     delete_cached_tmdb_metadata,
     prune_caches,
     get_cache_stats,
 )
+import blobstore
 from digital_release import digital_release_poll_loop
 import config as _cfg
 from discovery import (
@@ -1751,7 +1754,10 @@ async def _cache_prune_loop() -> None:
     await asyncio.sleep(300)
     while True:
         logger.info("Running scheduled cache prune")
-        await asyncio.get_running_loop().run_in_executor(None, prune_caches)
+        # prune_caches is async now (it deletes composite blobs from the
+        # blobstore alongside the metadata rows), so it's awaited directly
+        # rather than offloaded to a thread executor.
+        await prune_caches()
 
         # Evict expired entries from the in-process rating backoff dict.
         # Entries are also removed lazily on access, but titles that are never
@@ -1771,8 +1777,13 @@ async def lifespan(app: FastAPI):
     global _HTTP_CLIENT, _configurator_html, _render_assets_signature
     global _background_detection_queue, _background_detection_task
     init_db()
-    logger.info(f"Cache initialised (composite TTL {_cfg.COMPOSITE_CACHE_TTL}s / "
-                f"{_cfg.COMPOSITE_CACHE_TTL / 86400:.1f}d)")
+    await blobstore.init()
+    logger.info(
+        f"Cache initialised (storage={_STORAGE_KIND}, "
+        f"blobstore={getattr(blobstore, 'BACKEND_KIND', 'local')}; "
+        f"composite TTL {_cfg.COMPOSITE_CACHE_TTL}s / "
+        f"{_cfg.COMPOSITE_CACHE_TTL / 86400:.1f}d)"
+    )
     _HTTP_CLIENT = _make_http_client()
     logger.info("HTTP client initialised")
     # Warn on quality source misconfiguration
@@ -1848,6 +1859,11 @@ async def lifespan(app: FastAPI):
     _shutdown_detect_executor()
     await _HTTP_CLIENT.aclose()
     logger.info("HTTP client closed")
+    with suppress(Exception):
+        await blobstore.close()
+    with suppress(Exception):
+        close_db()
+    logger.info("Storage + blobstore closed")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -2381,7 +2397,7 @@ async def get_poster(
             ).encode()
         ).hexdigest()[:16]
         final_cache_key = f"{imdb_id}:{tmdb_id}:{type}:{_params_hash}"
-        cached_jpeg = None if _force_refresh else get_cached_final_poster(final_cache_key)
+        cached_jpeg = None if _force_refresh else await get_cached_final_poster(final_cache_key)
         if _force_refresh:
             logger.info(f"Force refresh (nocache) for {final_cache_key} — bypassing cache read")
         if cached_jpeg is not None:
@@ -3220,7 +3236,7 @@ async def get_poster(
         #                            would evaluate False without this separate flag
         if (final_cache_key is not None and not quality_pending and not _detection_deferred
                 and not rating_failed and not _rating_backoff_active):
-            set_cached_final_poster(final_cache_key, img_bytes)
+            await set_cached_final_poster(final_cache_key, img_bytes)
             logger.info(f"Final poster cached for {final_cache_key}")
 
         if _render_fut is not None:

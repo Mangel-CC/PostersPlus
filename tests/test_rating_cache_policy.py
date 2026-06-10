@@ -3,7 +3,10 @@ import sqlite3
 import time
 import unittest
 
-import cache
+# ElfHosted fork: the SQLite cache implementation (connection state +
+# rating-policy invalidation) lives in storage.sqlite_backend; cache.py is
+# now a thin facade. These unit tests target the backend internals directly.
+from storage import sqlite_backend as cache
 
 
 class RatingCachePolicyTests(unittest.TestCase):

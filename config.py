@@ -14,6 +14,10 @@ DB_PATH               = "/app/cache/cache.db"
 BADGE_DIR             = "/app/badges"
 TMDB_POSTER_CACHE_DIR = "/app/cache/tmdb_posters" # base posters from TMDB
 TMDB_LOGO_CACHE_DIR   = "/app/cache/tmdb_logos" # base logos from TMDB
+# Composite blob cache (ElfHosted fork) — the local blobstore backend uses
+# this dir; the S3 backend ignores it. Composite JPEG bytes live here (or in
+# an S3 bucket when OBJECT_STORE_URL is set) instead of in the relational DB.
+COMPOSITE_BLOB_DIR    = "/app/cache/composites"
 
 # Environment
 
@@ -36,6 +40,32 @@ SERVER_MDBLIST_KEY_2  = os.environ.get("MDBLIST_API_KEY_2", "").strip()
 # Ordered list of all configured server-side MDBList keys (primary first).
 # Used by the key-rotation logic in main.py to fall back when a key is exhausted.
 SERVER_MDBLIST_KEYS: list[str] = [k for k in [SERVER_MDBLIST_KEY, SERVER_MDBLIST_KEY_2] if k]
+
+# --- Hosted-mode pluggable backends (ElfHosted fork) ----------------------
+# All opt-in: unset, every selector falls back to the upstream-equivalent
+# default (SQLite / in-process / local filesystem), so a vanilla deploy is
+# byte-for-byte upstream behaviour.
+
+# Storage backend. A postgresql:// URL switches the cache layer from SQLite
+# to PostgreSQL. See storage/__init__.py.
+DATABASE_URL          = os.environ.get("DATABASE_URL", "").strip()
+DB_POOL_MIN_SIZE      = int(os.environ.get("DB_POOL_MIN_SIZE", "1"))
+DB_POOL_MAX_SIZE      = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))
+
+# Coordination backend. When REDIS_URL is set, MDBList rate-limit backoff,
+# the fleet-wide 429 cooldown, background-quality claims, leader-election
+# leases, and per-tenant rate limits are stored in Redis so replicas share
+# state. Unset keeps per-process state. See coordination/__init__.py.
+REDIS_URL             = os.environ.get("REDIS_URL", "").strip()
+REDIS_KEY_PREFIX      = os.environ.get("REDIS_KEY_PREFIX", "postersplus").strip() or "postersplus"
+
+# Blob store for composite poster bytes. When OBJECT_STORE_URL is set, bytes
+# go to an S3-compatible object store instead of COMPOSITE_BLOB_DIR.
+# URL format: s3://<bucket>?endpoint=<https://...>&region=<region>&prefix=<prefix>
+OBJECT_STORE_URL        = os.environ.get("OBJECT_STORE_URL", "").strip()
+# Optional CDN public URL — when set, the /poster and /p paths can 302 to the
+# CDN for composite bytes instead of proxying them through the app pod.
+OBJECT_STORE_PUBLIC_URL = os.environ.get("OBJECT_STORE_PUBLIC_URL", "").strip()
 
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a

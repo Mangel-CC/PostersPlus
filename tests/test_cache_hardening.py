@@ -2,7 +2,9 @@ import os
 import tempfile
 import unittest
 
-import cache
+# ElfHosted fork: _safe_cache_path / _atomic_write live in the SQLite backend
+# now (cache.py is a thin facade), so target the backend module directly.
+from storage import sqlite_backend as cache
 import main
 
 
