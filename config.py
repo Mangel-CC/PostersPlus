@@ -67,6 +67,44 @@ OBJECT_STORE_URL        = os.environ.get("OBJECT_STORE_URL", "").strip()
 # CDN for composite bytes instead of proxying them through the app pod.
 OBJECT_STORE_PUBLIC_URL = os.environ.get("OBJECT_STORE_PUBLIC_URL", "").strip()
 
+# --- Hosted-mode resource ceilings (ElfHosted fork) -----------------------
+# RENDER_CONCURRENCY caps Pillow renders in flight at once. Each render pins a
+# CPU core + ~10MB transient RAM; a burst of unique-param requests would
+# otherwise saturate every core and stall the event loop. Default = cpu_count
+# so single-tenant deploys behave like upstream (no artificial cap).
+RENDER_CONCURRENCY      = int(os.environ.get("RENDER_CONCURRENCY", "0")) or (os.cpu_count() or 2)
+# How long /poster waits for a render slot before returning 503. 0 = wait
+# forever; default 30s gives saturated clients a clear back-off signal.
+RENDER_QUEUE_TIMEOUT    = float(os.environ.get("RENDER_QUEUE_TIMEOUT", "30"))
+
+# --- Hosted-mode observability (ElfHosted fork) ---------------------------
+# Optional shared secret guarding /metrics. Unset leaves it open (gate at the
+# ingress). LOG_FORMAT=json emits structured JSON log lines (Loki/ES);
+# default "text" is upstream behaviour.
+METRICS_ACCESS_KEY      = os.environ.get("METRICS_ACCESS_KEY", "").strip()
+LOG_FORMAT              = os.environ.get("LOG_FORMAT", "text").strip().lower()
+
+# --- Per-tenant rate limit (ElfHosted fork) -------------------------------
+# Max /poster (and /p) requests per tenant per second. 0 disables (upstream
+# behaviour). Tenant identity = sha256(user-key)[:16] when users bring their
+# own TMDB/MDBList key; otherwise "operator" (/poster) or "preset" (/p).
+RATE_LIMIT_RPS          = int(os.environ.get("RATE_LIMIT_RPS", "0"))
+
+# --- Static-preset moat (ElfHosted fork) ----------------------------------
+# When PRESET_ENABLED, anonymous requests can hit a small set of named visual
+# presets via /p/{preset}/{type}/{imdb_id}.jpg without supplying any key — the
+# operator's server keys are used, rating/quality/text-detection are read from
+# cache only (never fetched), and PRESET_CDN_CACHE_TTL sets the Cache-Control
+# max-age on cached preset responses (deterministic per preset+title, so a far
+# longer TTL than CDN_CACHE_TTL is safe).
+PRESET_ENABLED        = os.environ.get("PRESET_ENABLED", "").strip().lower() in ("1", "true", "yes")
+PRESET_CDN_CACHE_TTL  = int(os.environ.get("PRESET_CDN_CACHE_TTL", "86400"))
+# Floor on anonymous /search and /resolve-imdb (the public preset flow needs
+# the title picker). RATE_LIMIT_RPS only gates /poster + /p; without this
+# independent floor an operator who left RATE_LIMIT_RPS=0 would leave the TMDB
+# proxy endpoints unthrottled. 0 disables (fully private deploys).
+ANONYMOUS_TMDB_RPS    = int(os.environ.get("ANONYMOUS_TMDB_RPS", "5"))
+
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a
 # Cache-Control: public header so Cloudflare (or any CDN) caches them at the
