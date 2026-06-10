@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0-elf.3](https://github.com/elfhosted/PostersPlus/compare/v1.1.0-elf.2...v1.1.0-elf.3) (2026-06-10)
+
+
+### Bug Fixes
+
+* real version in header What's-New chip (v1.1.0-elf.3) ([a02eb7a](https://github.com/elfhosted/PostersPlus/commit/a02eb7aa9a64ff3f3e34ccab4014de2eea0e0312))
+* show real version in the header What's-New chip ([66bbbcf](https://github.com/elfhosted/PostersPlus/commit/66bbbcf8e9b92d8268896bd4624b7350bde28c25))
+
 ## [1.1.0-elf.2](https://github.com/elfhosted/PostersPlus/compare/v1.1.0-elf.1...v1.1.0-elf.2) (2026-06-10)
 
 
