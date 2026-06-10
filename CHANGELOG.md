@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0-elf.5](https://github.com/elfhosted/PostersPlus/compare/v1.1.0-elf.4...v1.1.0-elf.5) (2026-06-10)
+
+
+### Features
+
+* read-only showcase for public lock view (v1.1.0-elf.5) ([986d05b](https://github.com/elfhosted/PostersPlus/commit/986d05b086ccadffafd13f5e55555009a6dac22a))
+* read-only showcase for the public lock view ([d38de4f](https://github.com/elfhosted/PostersPlus/commit/d38de4ff14c44797d08479e7094f39ad4f97b5c4))
+
 ## [1.1.0-elf.4](https://github.com/elfhosted/PostersPlus/compare/v1.1.0-elf.3...v1.1.0-elf.4) (2026-06-10)
 
 
