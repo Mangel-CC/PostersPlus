@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.0-elf.2](https://github.com/elfhosted/PostersPlus/compare/v1.1.0-elf.1...v1.1.0-elf.2) (2026-06-10)
+
+
+### Bug Fixes
+
+* discoverable preset picker in public lock mode ([b353080](https://github.com/elfhosted/PostersPlus/commit/b353080ac129932b9db75979bf67cd05e08f05fe))
+* public-tier version footer + discoverable preset picker (v1.1.0-elf.2) ([6262990](https://github.com/elfhosted/PostersPlus/commit/6262990f450b86c9f189003e9d41fdafde635d44))
+* surface app version in /server-caps for the build footer ([45797ba](https://github.com/elfhosted/PostersPlus/commit/45797ba231010961aee9502fdbe838f378147834))
+
 ## [1.1.0-elf.1](https://github.com/elfhosted/PostersPlus/compare/v1.0.3-elf.2...v1.1.0-elf.1) (2026-06-10)
 
 
