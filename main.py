@@ -3031,6 +3031,19 @@ async def get_poster(
     if not rating_already_cached and effective_mdblist_key:
         _loop_now = asyncio.get_running_loop().time()
 
+        # ElfHosted fork: fleet-wide MDBList cooldown. When any replica has been
+        # 429'd recently, every replica backs off — cross-worker via the
+        # coordination layer (Redis), or per-process on the in-process default
+        # (where it overlaps the per-key cooldown below). Suppresses the fetch
+        # and the composite persist so an N/A score isn't locked in.
+        if await coord.is_backoff_active(
+            coord.NS_MDBLIST_GLOBAL_COOLDOWN, coord.MDBLIST_GLOBAL_KEY
+        ):
+            logger.debug(f"Rating fetch for {imdb_id} skipped (fleet-wide MDBList cooldown)")
+            effective_mdblist_key = None
+            _rating_backoff_active = True
+            _mdblist_unavailable_reason = "fleet-wide MDBList cooldown active"
+
         # Per-key cooldown: configured server keys may rotate; request-supplied
         # keys remain isolated and simply wait for their own cooldown to expire.
         if effective_mdblist_key and _loop_now < _mdblist_key_cooldown.get(effective_mdblist_key, 0.0):
@@ -3420,6 +3433,15 @@ async def get_poster(
                 f"MDBList key rate-limited for {imdb_id}; cooling down for "
                 f"{_backoff_secs:.0f}s"
             )
+            # ElfHosted fork: raise a fleet-wide cooldown too, so sibling
+            # replicas (sharing the same MDBList keys) back off instead of
+            # each discovering the 429 independently. No-op beyond the
+            # per-process cooldown above on the in-process coordinator.
+            with suppress(Exception):
+                await coord.set_backoff(
+                    coord.NS_MDBLIST_GLOBAL_COOLDOWN, coord.MDBLIST_GLOBAL_KEY,
+                    ttl_seconds=_backoff_secs,
+                )
             if _rescue_key is not None:
                 effective_mdblist_key = _rescue_key
                 logger.warning(
