@@ -2043,9 +2043,9 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
       <div class="lock-banner-title">Public access — preset selection only</div>
       <div class="lock-banner-body">
         To keep the public instance scalable, customization is limited
-        to the presets below. Search a title, then pick a look from
-        <strong>Load Preset</strong> to get a copyable poster URL. For full
-        per-poster control, run your own instance:
+        to ready-made presets. Pick a look from <strong>Poster Style</strong>,
+        search a title, and copy the poster URL. For full per-poster control
+        (all the sliders), run your own instance:
       </div>
     </div>
     <div class="lock-banner-cta-row">
@@ -2255,7 +2255,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </select>
               <div class="field-hint">★ indicates the poster text is fully translated, not just the logo.</div>
             </div>
-            <div class="field" style="margin-top:6px;">
+            <div class="field lock-hide-field" style="margin-top:6px;">
               <label class="field-label">Language Priority</label>
               <select id="cfg-logo-priority" onchange="build(); queuePreviewReload()">
                 <option value="native_original" selected>Native &gt; Original &gt; Text</option>
@@ -2265,7 +2265,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </select>
               <div class="field-hint">Original is the source language of the content, text is plain text.</div>
             </div>
-            <div class="field" style="margin-top:6px;">
+            <div class="field lock-hide-field" style="margin-top:6px;">
               <label class="field-label">Fallback Poster Style</label>
               <select id="cfg-fallback-bg-style" onchange="build(); queuePreviewReload()">
                 <option value="minimal">Textured Backdrop</option>
@@ -2273,7 +2273,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </select>
               <div class="field-hint"><a href="#" onclick="openFallbackGallery(); return false;">Displayed if no poster can be found.</a>.</div>
             </div>
-            <div class="field cfg-sep">
+            <div class="field cfg-sep lock-hide-field">
               <label class="field-label">Top Vignette</label>
               <select id="cfg-top-gradient" onchange="build(); queuePreviewReload()">
                 <option value="off">Off</option>
@@ -2283,7 +2283,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </select>
               <div class="field-hint">The power of the darkening applied to the top.</div>
             </div>
-            <div class="field">
+            <div class="field lock-hide-field">
               <label class="field-label">Bottom Vignette</label>
               <select id="cfg-bottom-gradient" onchange="build(); queuePreviewReload()">
                 <option value="off">Off</option>
