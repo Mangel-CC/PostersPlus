@@ -1910,6 +1910,19 @@
      field remains. The first .field in the section is the search box. */
   body.preset-only-mode #tab-host .section[data-tab="core"] > .section-header { display: none !important; }
   body.preset-only-mode .lock-hide-field { display: none !important; }
+  /* Prominent preset picker: hidden in the normal tabbed UI (the gallery is
+     reached via the Load Preset console icon there), shown in lock mode. */
+  .lock-only-field { display: none; }
+  body.preset-only-mode .lock-only-field { display: block; }
+  .btn-choose-preset {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; padding: 12px 16px; margin-top: 2px;
+    background: var(--gold-dim, #3a3320); color: var(--cream, #f0e6d2);
+    border: 1px solid var(--gold-dim, #6a5a30); border-radius: 8px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  .btn-choose-preset:hover { background: var(--gold, #5a4a20); border-color: var(--gold-bright, #c9a227); }
   /* Belt-and-braces: kill the URL import affordances in locked mode — a
      /poster import would silently drop params and a preset URL doesn't
      need it (the gallery does the same job in one click). */
@@ -2120,6 +2133,19 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
             <span class="section-chevron">▼</span>
           </div>
           <div class="section-body">
+
+            <!-- ElfHosted fork: prominent preset picker, shown ONLY in
+                 public-tier lock mode. There the tabbed editor is hidden, so
+                 the gallery is the primary action — a labelled button is far
+                 more discoverable than the small Load Preset console icon. -->
+            <div class="field lock-only-field" id="lock-preset-field">
+              <label class="field-label">Poster Style</label>
+              <button type="button" class="btn-choose-preset" onclick="openPresetModal()">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6l2 2h8v12H4z"/><path d="M12 10v6M9 13h6"/></svg>
+                <span id="lock-preset-label">Choose a preset style…</span>
+              </button>
+              <div class="field-hint">Pick a look, then search a title below to get a copyable poster URL.</div>
+            </div>
 
             <div class="field">
               <label class="field-label">Content Search</label>
@@ -4401,6 +4427,9 @@ function loadPreset(id) {
   if (lockModeActive) {
     lockedPresetId = preset.id;
     closePresetModal();
+    // Reflect the choice on the prominent picker button.
+    const lockLabel = document.getElementById('lock-preset-label');
+    if (lockLabel) lockLabel.textContent = preset.name;
     if (!resolvedImdbId) {
       setLog('preview-log', `Preset "${preset.name}" selected — search & select a title to preview / copy its URL.`, 'info');
     } else {
