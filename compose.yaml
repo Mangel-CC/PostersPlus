@@ -13,7 +13,14 @@ services:
       - "8000:8000"
     restart: unless-stopped
     volumes:
-      - ./postersplus-cache:/app/cache  # cache DB, TMDB posters/logos, discovery_overrides.json
+      # Named volume (not a host bind) so a fresh `compose up` works with the
+      # non-root uid 568 the image runs as: Docker seeds a new named volume's
+      # ownership from the image's /app/cache (owned by 568), whereas a fresh
+      # host bind dir is created root-owned and would be unwritable. Holds the
+      # cache DB, TMDB posters/logos, and composites.
+      # To supply discovery_overrides.json, copy it in after first start:
+      #   docker compose cp ./discovery_overrides.json postersplus:/app/cache/
+      - postersplus-cache:/app/cache
     env_file:
       - .env # see this file for an explanation of what each flag does
     environment: 
@@ -48,12 +55,14 @@ services:
       - RENDER_QUEUE_TIMEOUT=${RENDER_QUEUE_TIMEOUT:-30}
       - METRICS_ACCESS_KEY=${METRICS_ACCESS_KEY:-}
       - LOG_FORMAT=${LOG_FORMAT:-text}
-    # The image runs as uid/gid 568. On a fresh host volume, chown the cache
-    # dir to 568 before first `up` (mkdir -p postersplus-cache && sudo chown
-    # 568:568 postersplus-cache), or run this service with `user: "568:568"`.
+    # The image runs as the non-root uid 568; the named volume below is seeded
+    # writable for it automatically (see the volumes: note).
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/live')"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
+
+volumes:
+  postersplus-cache:

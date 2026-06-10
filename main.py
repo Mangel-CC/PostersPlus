@@ -2925,9 +2925,23 @@ async def get_poster(
         final_cache_key = _composite_cache_key(
             imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb
         )
-        cached_jpeg = None if _force_refresh else await get_cached_final_poster(final_cache_key)
         if _force_refresh:
             logger.info(f"Force refresh (nocache) for {final_cache_key} — bypassing cache read")
+        # ElfHosted fork: when a CDN public URL is configured (OBJECT_STORE_PUBLIC_URL),
+        # serve cache hits by 302 to the CDN instead of pulling the bytes through
+        # the app pod + an S3 GET on every warm request. Only the cheap metadata
+        # freshness probe runs here — no blob fetch. Falls through to the inline
+        # path when no public URL is set or the row isn't fresh.
+        if not _force_refresh:
+            _cdn_url = get_cached_final_poster_url(final_cache_key)
+            if _cdn_url is not None and await is_cached_final_poster_fresh(final_cache_key):
+                logger.info(f"Final poster cache hit (CDN redirect) for {final_cache_key}")
+                _redir = Response(status_code=302)
+                _redir.headers["Location"] = _cdn_url
+                if _cfg.CDN_CACHE_TTL > 0:
+                    _redir.headers["Cache-Control"] = f"public, max-age={_cfg.CDN_CACHE_TTL}"
+                return _redir
+        cached_jpeg = None if _force_refresh else await get_cached_final_poster(final_cache_key)
         if cached_jpeg is not None:
             logger.info(f"Final poster cache hit for {final_cache_key}")
             etag = f'"{final_cache_key}"'
