@@ -1,21 +1,31 @@
-"""SQLite storage backend — extracted from upstream cache.py.
+"""SQLite storage backend — the default, used when DATABASE_URL is unset.
 
-Default backend, used when DATABASE_URL is unset. Kept close to upstream's
-cache.py so cherry-picks from upstream apply with minimal friction.
+Seeded from upstream's cache.py (v1.1.0) so it carries upstream's full
+schema (rating/quality/metadata/trending/release-status/text-detection
+caches) and its concurrency hardening verbatim: thread-local connections,
+WAL, busy_timeout, BEGIN IMMEDIATE schema creation, and the additive
+``_add_column_if_missing`` migrations.
 
-Phase 10 split:
-  * TMDB poster/logo bytes  — direct filesystem (per-pod ephemeral cache
-    in front of TMDB's own CDN; no remote-shared storage benefit since
-    TMDB's CDN is the source of truth).
-  * Composite (rendered) bytes — delegated to the blobstore package
-    so they can live in S3 + a CDN custom domain instead of bloating
-    the relational backend with BYTEA. This module keeps only the
-    cache metadata row (cache_key + cached_at).
+The ElfHosted fork grafts on top of that base, kept deliberately small so
+upstream cache.py changes still map almost 1-to-1:
+
+  * Composite (rendered) poster BYTES move to the ``blobstore`` package
+    (local FS default, S3/CDN via OBJECT_STORE_URL). final_poster_cache
+    keeps only the metadata row (cache_key + cached_at) for TTL/freshness;
+    the JPEG itself never bloats the relational backend. This makes the
+    final-poster trio async.
+  * imdb_to_tmdb_cache table + get/set — lets the anonymous /p preset
+    route skip a TMDB /find call on every public hit.
+  * count_digital_releases / ping / close — lifecycle + /ready + /stats
+    helpers the hosted layer expects.
+
+The Postgres backend (storage/postgres_backend.py) mirrors this surface.
 """
 import logging
 import os
 import sqlite3
 import threading
+import tempfile
 import time
 import json
 from datetime import datetime
@@ -38,31 +48,93 @@ from config import (
     COMPOSITE_MAX_ENTRIES,
     QUALITY_OLD_CACHE_DURATION,
     DIGITAL_RELEASE_MAX_AGE_DAYS,
+    RATING_MIN_VOTES,
 )
 
-_db_conn: sqlite3.Connection | None = None
-_db_lock = threading.Lock()   # used only for writes; WAL allows concurrent reads
+# One SQLite connection PER THREAD (thread-local).  A single shared connection
+# serialises every statement — reads included — on its internal mutex, so under
+# load reads queue behind one another and behind writes.  Per-thread connections
+# let WAL's concurrent readers actually run in parallel; writes are still
+# serialised within this process by _db_lock, and across worker processes by
+# SQLite plus the busy timeout below.
+_local = threading.local()
+_db_lock = threading.Lock()     # serialises writes within this process
+_initialised = False
+
+
+def _apply_conn_pragmas(conn: sqlite3.Connection) -> None:
+    """Connection-level PRAGMAs, applied to every connection.  (journal_mode=WAL
+    and auto_vacuum are DB-level and persist in the file, so they're set once in
+    init_db.)"""
+    conn.execute("PRAGMA synchronous=NORMAL")       # safe with WAL; avoids unnecessary fsyncs
+    conn.execute("PRAGMA cache_size=-32000")        # 32 MB in-process page cache
+    conn.execute("PRAGMA temp_store=MEMORY")        # temp tables/indices stay in RAM
+    conn.execute("PRAGMA busy_timeout=15000")       # wait up to 15s if another worker holds the write lock
+    conn.execute("PRAGMA wal_autocheckpoint=1000")  # fold WAL back into main DB at 1000 pages (~4 MB)
+
+
+def _enable_wal_with_retry(conn: sqlite3.Connection) -> None:
+    """Enable WAL despite simultaneous worker startup on the same database."""
+    for attempt in range(20):
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == 19:
+                raise
+            time.sleep(0.1)
 
 
 def get_db() -> sqlite3.Connection:
-    if _db_conn is None:
+    if not _initialised:
         raise RuntimeError("Database not initialized")
-    return _db_conn
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        _apply_conn_pragmas(conn)
+        _local.conn = conn
+    return conn
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, definition: str
+) -> None:
+    """Apply an additive migration safely when multiple workers start together."""
+    columns = {
+        row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column in columns:
+        return
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except sqlite3.OperationalError as exc:
+        # Another worker may have added the column after our PRAGMA snapshot.
+        if "duplicate column name" not in str(exc).lower():
+            raise
 
 
 def init_db() -> None:
-    global _db_conn
+    global _initialised
     os.makedirs(TMDB_POSTER_CACHE_DIR, exist_ok=True)
     os.makedirs(TMDB_LOGO_CACHE_DIR, exist_ok=True)
-    _db_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    _db_conn.execute("PRAGMA journal_mode=WAL")
-    _db_conn.execute("PRAGMA synchronous=NORMAL")       # safe with WAL; avoids unnecessary fsyncs
-    _db_conn.execute("PRAGMA cache_size=-32000")        # 32 MB in-process page cache
-    _db_conn.execute("PRAGMA temp_store=MEMORY")        # temp tables/indices stay in RAM
-    _db_conn.execute("PRAGMA busy_timeout=5000")        # wait up to 5s if another worker holds the write lock
-    _db_conn.execute("PRAGMA wal_autocheckpoint=1000")  # fold WAL back into main DB at 1000 pages (~4 MB)
+    _initialised = True
+    conn = get_db()   # this thread's connection, with the per-connection PRAGMAs
 
-    _db_conn.execute("""
+    # Enable incremental auto-vacuum so prune_caches' PRAGMA incremental_vacuum
+    # can actually return freed pages to the OS.  auto_vacuum can only be set
+    # before the first table is created; an existing DB is converted lazily by a
+    # one-time VACUUM in prune_caches (off the event loop).  So we only enable it
+    # here on a brand-new database.  Must run before any table is created.
+    _is_new_db = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+    ).fetchone()[0] == 0
+    if _is_new_db:
+        conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+
+    _enable_wal_with_retry(conn)
+    # Serialize all schema creation and additive migrations across workers.
+    conn.execute("BEGIN IMMEDIATE")
+
+    conn.execute("""
     CREATE TABLE IF NOT EXISTS rating_cache (
         imdb_id        TEXT PRIMARY KEY,
         ratings_json   TEXT,
@@ -76,14 +148,11 @@ def init_db() -> None:
         age_rating     INTEGER,
         is_cult        INTEGER NOT NULL DEFAULT 0,
         is_true_story  INTEGER NOT NULL DEFAULT 0,
-        is_metacritic  INTEGER NOT NULL DEFAULT 0
+        is_metacritic  INTEGER NOT NULL DEFAULT 0,
+        rating_min_votes INTEGER
     )
     """)
 
-    existing_cols = {
-        row[1]
-        for row in _db_conn.execute("PRAGMA table_info(rating_cache)").fetchall()
-    }
     for col, definition in (
         ("award_wins",     "TEXT NOT NULL DEFAULT ''"),
         ("award_noms",     "TEXT NOT NULL DEFAULT ''"),
@@ -93,13 +162,11 @@ def init_db() -> None:
         ("is_cult",        "INTEGER NOT NULL DEFAULT 0"),
         ("is_true_story",  "INTEGER NOT NULL DEFAULT 0"),
         ("is_metacritic",  "INTEGER NOT NULL DEFAULT 0"),
+        ("rating_min_votes", "INTEGER"),
     ):
-        if col not in existing_cols:
-            _db_conn.execute(
-                f"ALTER TABLE rating_cache ADD COLUMN {col} {definition}"
-            )
+        _add_column_if_missing(conn, "rating_cache", col, definition)
 
-    _db_conn.execute("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS quality_cache (
             imdb_id      TEXT PRIMARY KEY,
             tokens       TEXT,
@@ -108,7 +175,7 @@ def init_db() -> None:
         )
     """)
 
-    _db_conn.execute("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS trending_cache (
             media_type    TEXT PRIMARY KEY,
             rankings_json TEXT,
@@ -116,7 +183,7 @@ def init_db() -> None:
         )
     """)
 
-    _db_conn.execute("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS tmdb_metadata_cache (
             cache_key           TEXT PRIMARY KEY,
             title               TEXT,
@@ -136,60 +203,39 @@ def init_db() -> None:
         )
     """)
 
-    # Phase 10: composite-poster bytes live in blobstore (FS or S3); the
-    # table holds only metadata so the relational backend can do TTL
-    # bookkeeping cheaply. New deployments get the metadata-only schema;
-    # existing deployments need the migration below.
-    _db_conn.execute("""
+    # Final composite poster cache — METADATA ONLY.
+    # ElfHosted fork: the composited JPEG bytes live in the blobstore
+    # (local FS default, S3/CDN via OBJECT_STORE_URL). This table keeps
+    # only the cache_key + cached_at so TTL/freshness checks stay a cheap
+    # relational lookup and the bytes never bloat SQLite/Postgres.
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS final_poster_cache (
             cache_key  TEXT PRIMARY KEY,
             cached_at  INTEGER NOT NULL
         )
     """)
-    # Migrate the pre-Phase-10 schema if present. SQLite 3.35+ supports
-    # DROP COLUMN; existing bytes are discarded (cache refills via TTL).
-    existing_composite_cols = {
-        row[1]
-        for row in _db_conn.execute("PRAGMA table_info(final_poster_cache)").fetchall()
-    }
-    if "jpeg_bytes" in existing_composite_cols:
-        try:
-            _db_conn.execute("ALTER TABLE final_poster_cache DROP COLUMN jpeg_bytes")
-            logger.info(
-                "Migrated final_poster_cache: dropped jpeg_bytes BLOB; "
-                "cached composites will re-render on next request"
-            )
-        except sqlite3.OperationalError as exc:
-            # SQLite < 3.35: rebuild the table without the column.
-            logger.info(
-                "SQLite DROP COLUMN unsupported (%s); recreating final_poster_cache "
-                "without jpeg_bytes (existing cached composites discarded)", exc,
-            )
-            _db_conn.execute("ALTER TABLE final_poster_cache RENAME TO _final_poster_cache_old")
-            _db_conn.execute("""
-                CREATE TABLE final_poster_cache (
-                    cache_key TEXT PRIMARY KEY,
-                    cached_at INTEGER NOT NULL
-                )
-            """)
-            _db_conn.execute("""
-                INSERT INTO final_poster_cache (cache_key, cached_at)
-                SELECT cache_key, cached_at FROM _final_poster_cache_old
-            """)
-            _db_conn.execute("DROP TABLE _final_poster_cache_old")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_final_poster_cached_at "
+        "ON final_poster_cache(cached_at)"
+    )
+    # Drop the legacy jpeg_bytes column if migrating an old DB that stored
+    # bytes inline. SQLite can't DROP COLUMN before 3.35; if unsupported,
+    # the column is simply left unused (writes target the named columns).
+    try:
+        _legacy_cols = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(final_poster_cache)"
+            ).fetchall()
+        }
+        if "jpeg_bytes" in _legacy_cols:
+            conn.execute("ALTER TABLE final_poster_cache DROP COLUMN jpeg_bytes")
+    except sqlite3.OperationalError:
+        pass
 
-    _db_conn.execute("""
-        CREATE TABLE IF NOT EXISTS digital_release_cache (
-            imdb_id   TEXT PRIMARY KEY,
-            posted_at INTEGER NOT NULL
-        )
-    """)
-
-    # Phase 11: imdb_id -> tmdb_id mapping. Used by the preset endpoint
-    # (/p/{preset}/{type}/{imdb_id}.jpg) to avoid a TMDB /find call on
-    # every public hit. The mapping is effectively immutable, so there's
-    # no TTL — entries live for the lifetime of the cache.
-    _db_conn.execute("""
+    # imdb_id -> tmdb_id mapping (ElfHosted fork). Lets the anonymous /p
+    # preset route skip a TMDB /find call on every public hit. The mapping
+    # is effectively immutable, so there's no TTL.
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS imdb_to_tmdb_cache (
             imdb_id    TEXT NOT NULL,
             media_type TEXT NOT NULL,
@@ -198,10 +244,43 @@ def init_db() -> None:
         )
     """)
 
-    existing_meta_cols = {
-        row[1]
-        for row in _db_conn.execute("PRAGMA table_info(tmdb_metadata_cache)").fetchall()
-    }
+    # Digital release cache.
+    # Populated by the r/movieleaks poller; one row per IMDB ID.
+    # posted_at is the Reddit post's created_utc (used for expiry).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS digital_release_cache (
+            imdb_id   TEXT PRIMARY KEY,
+            posted_at INTEGER NOT NULL
+        )
+    """)
+
+    # Release status cache — populated on demand when the "release_status"
+    # sash slot is enabled.  Stored separately from the main metadata cache
+    # so users who don't enable the feature never pay the extra API call.
+    # cache_key = "{media_type}_{tmdb_id}", status = "BluRay"|"Streaming"|"Cinema"|"Production"
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS release_status_cache (
+            cache_key TEXT PRIMARY KEY,
+            status    TEXT NOT NULL,
+            cached_at INTEGER NOT NULL
+        )
+    """)
+
+    # Burned-in-text detection results, keyed by source asset + detection params.
+    # The PP-OCR scan depends only on the image bytes and confidence, never
+    # on the user's URL config — so memoising it here stops the most expensive
+    # feature from re-running on every config change (composite-cache miss).
+    # TMDB image paths are content-addressed (immutable), so results never go
+    # stale; cached_at exists only for housekeeping/pruning.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS text_detection_cache (
+            cache_key TEXT PRIMARY KEY,
+            has_text  INTEGER NOT NULL,
+            cached_at INTEGER NOT NULL
+        )
+    """)
+
+    # Migrate existing tmdb_metadata_cache rows.
     for col, definition in (
         ("credits_json",        "TEXT"),
         ("production_cos_json", "TEXT"),
@@ -209,15 +288,22 @@ def init_db() -> None:
         ("number_of_seasons",   "INTEGER"),
         ("number_of_episodes",  "INTEGER"),
         ("original_language",   "TEXT"),
+        ("original_title",      "TEXT"),
         ("backdrop_path",       "TEXT"),
+        ("tmdb_status",         "TEXT"),
+        ("vote_count",          "INTEGER"),
+        ("text_backdrop_path",  "TEXT"),
+        ("original_poster_path","TEXT"),
+        ("poster_langs_json",   "TEXT"),
     ):
-        if col not in existing_meta_cols:
-            _db_conn.execute(
-                f"ALTER TABLE tmdb_metadata_cache ADD COLUMN {col} {definition}"
-            )
+        _add_column_if_missing(conn, "tmdb_metadata_cache", col, definition)
 
-    _db_conn.commit()
+    conn.commit()
 
+
+# ---------------------------------------------------------------------------
+# TTL helper
+# ---------------------------------------------------------------------------
 
 def _rating_ttl(release_date: str | None) -> int:
     if not release_date:
@@ -240,13 +326,14 @@ def _quality_ttl(release_date: str | None) -> int:
         return QUALITY_OLD_CACHE_DURATION
 
 
-def _peek_final_poster(cache_key: str) -> bool:
-    """Internal: row-only TTL check. Returns True if a fresh row exists.
+# ---------------------------------------------------------------------------
+# Final poster cache
+# ---------------------------------------------------------------------------
 
-    Used by both the cheap freshness probe (CDN-redirect path) and the
-    full bytes fetcher. Side-effect: deletes the row on expiry, schedules
-    the blob deletion via the caller's async context.
-    """
+def _peek_final_poster(cache_key: str) -> bool:
+    """Internal: row-only TTL check. Returns True if a fresh metadata row
+    exists. Side-effect: deletes the row on expiry. Never touches the
+    blobstore — the caller schedules any blob cleanup in its async context."""
     row = get_db().execute(
         "SELECT cached_at FROM final_poster_cache WHERE cache_key = ?",
         (cache_key,),
@@ -268,16 +355,11 @@ def _peek_final_poster(cache_key: str) -> bool:
 
 async def is_cached_final_poster_fresh(cache_key: str) -> bool:
     """Lightweight freshness probe — checks the metadata row + TTL only,
-    never touches the blobstore. Used by /poster to decide whether to
-    emit a 302 to the CDN without pulling the bytes through the app
-    pod.
-
-    On expiry: deletes both the metadata row and the orphaned blob.
-    """
+    never pulls the bytes. Lets /poster and /p 302 straight to the CDN
+    when a public URL is configured. Deletes the orphaned blob on expiry."""
     try:
         fresh = _peek_final_poster(cache_key)
         if not fresh:
-            # Best-effort blob cleanup. Safe no-op when no blob exists.
             await blobstore.delete(blobstore.BUCKET_COMPOSITES, cache_key)
         return fresh
     except Exception as exc:
@@ -286,9 +368,9 @@ async def is_cached_final_poster_fresh(cache_key: str) -> bool:
 
 
 async def get_cached_final_poster(cache_key: str) -> bytes | None:
-    """Full read: metadata TTL check + blob fetch. Use the freshness
-    probe + url_for + 302 path instead when a CDN URL is configured;
-    this function is only the inline-serve fallback."""
+    """Full read: metadata TTL check + blob fetch. Prefer the freshness
+    probe + url_for + 302 path when a CDN URL is configured; this is the
+    inline-serve fallback (local blobstore, or no public URL)."""
     try:
         if not _peek_final_poster(cache_key):
             await blobstore.delete(blobstore.BUCKET_COMPOSITES, cache_key)
@@ -303,17 +385,19 @@ async def get_cached_final_poster(cache_key: str) -> bytes | None:
 
 def get_cached_final_poster_url(cache_key: str) -> str | None:
     """Return a public CDN URL for the composite if the blobstore backend
-    provides one (OBJECT_STORE_PUBLIC_URL set). Sync — doesn't touch S3,
-    just constructs the URL from the configured prefix. Caller still
-    needs to confirm the row exists + isn't expired before redirecting."""
+    provides one (OBJECT_STORE_PUBLIC_URL set). Sync — just constructs the
+    URL from the configured prefix; doesn't touch S3. Caller must confirm
+    the row exists + isn't expired (is_cached_final_poster_fresh) first."""
     return blobstore.url_for(blobstore.BUCKET_COMPOSITES, cache_key)
 
 
 async def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes) -> None:
+    """Store a composited JPEG: bytes to the blobstore, metadata row to the
+    relational backend, evicting oldest entries if over the cap."""
     try:
-        # Write the bytes first so the metadata row is never present
-        # without a corresponding blob (which would race a reader into
-        # a 502-ish state on the very first hit).
+        # Write the bytes first so the metadata row is never present without
+        # a corresponding blob (which would race a reader into a broken state
+        # on the very first hit).
         await blobstore.put(
             blobstore.BUCKET_COMPOSITES, cache_key, jpeg_bytes,
             content_type="image/jpeg",
@@ -326,60 +410,116 @@ async def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes) -> None:
                 """,
                 (cache_key, int(time.time())),
             )
+            evict_keys: list[str] = []
             if COMPOSITE_MAX_ENTRIES > 0:
                 (count,) = get_db().execute(
                     "SELECT COUNT(*) FROM final_poster_cache"
                 ).fetchone()
                 overflow = count - COMPOSITE_MAX_ENTRIES
                 if overflow > 0:
-                    evict = get_db().execute(
-                        "SELECT cache_key FROM final_poster_cache "
-                        "ORDER BY cached_at ASC LIMIT ?",
-                        (overflow,),
-                    ).fetchall()
-                    evict_keys = [r[0] for r in evict]
+                    evict_keys = [
+                        r[0] for r in get_db().execute(
+                            "SELECT cache_key FROM final_poster_cache "
+                            "ORDER BY cached_at ASC LIMIT ?",
+                            (overflow,),
+                        ).fetchall()
+                    ]
                     get_db().execute(
                         "DELETE FROM final_poster_cache WHERE cache_key IN "
                         f"({','.join('?' * len(evict_keys))})",
                         evict_keys,
                     )
                     logger.info(f"Composite cache cap: evicted {overflow} oldest entries")
-                    # Best-effort blob cleanup for evicted keys.
-                    for k in evict_keys:
-                        try:
-                            await blobstore.delete(blobstore.BUCKET_COMPOSITES, k)
-                        except Exception:
-                            pass
             get_db().commit()
+        # Best-effort blob cleanup for evicted keys, outside the write lock.
+        for k in evict_keys:
+            try:
+                await blobstore.delete(blobstore.BUCKET_COMPOSITES, k)
+            except Exception:
+                pass
     except Exception as exc:
         logger.error(f"Final poster cache write error: {exc}")
 
 
+def get_cache_stats() -> dict:
+    """
+    Return row counts for every cache table plus the composite cache's total
+    byte size and the DB file size on disk.  Used by the /stats endpoint so
+    operators can see cache health at a glance.  Never raises.
+    """
+    stats: dict = {}
+    try:
+        db = get_db()
+        for table in (
+            "rating_cache", "quality_cache", "trending_cache",
+            "tmdb_metadata_cache", "final_poster_cache",
+            "digital_release_cache", "release_status_cache",
+            "text_detection_cache",
+        ):
+            try:
+                (n,) = db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                stats[table] = n
+            except Exception:
+                stats[table] = None
+
+        # Composite bytes live in the blobstore now, not SQLite — the
+        # relational backend only holds metadata rows, so there is no
+        # inline byte total to report here.
+        stats["composite_bytes"] = None
+
+        try:
+            stats["db_file_bytes"] = os.path.getsize(DB_PATH)
+        except OSError:
+            stats["db_file_bytes"] = None
+    except Exception as exc:
+        logger.error(f"Cache stats error: {exc}")
+    return stats
+
+
 async def prune_caches() -> None:
+    """
+    Delete expired rows from every SQLite cache table.
+
+    Called periodically by a leader-elected background task in main.py.  All
+    tables use a simple age cutoff; pruning everything keeps the DB tidy.
+
+    For rating/quality we use the maximum possible TTL as the cutoff so we
+    never delete an entry that might still be considered fresh for a new
+    release.  Any surviving-but-expired rows will be evicted lazily on the
+    next read as before.
+
+    ElfHosted fork: composite BYTES live in the blobstore, so expired
+    composite rows are collected first and their blobs deleted alongside the
+    metadata rows.
+    """
     now = int(time.time())
     try:
-        expired_composite_keys: list[str] = []
+        # Collect expired composite keys before deleting the rows so we can
+        # also drop their blobs from the blobstore.
+        expired_composites: list[str] = []
+        try:
+            expired_composites = [
+                r[0] for r in get_db().execute(
+                    "SELECT cache_key FROM final_poster_cache WHERE cached_at < ?",
+                    (now - COMPOSITE_CACHE_TTL,),
+                ).fetchall()
+            ]
+        except Exception:
+            pass
+
         with _db_lock:
             db = get_db()
 
-            # Phase 10: collect the composite cache_keys before deletion so
-            # we can drop the corresponding blobs. Without this the metadata
-            # row goes away but the S3/B2 object lingers forever.
-            cutoff = now - COMPOSITE_CACHE_TTL
-            expired_composite_keys = [
-                r[0] for r in db.execute(
-                    "SELECT cache_key FROM final_poster_cache WHERE cached_at < ?",
-                    (cutoff,),
-                ).fetchall()
-            ]
-            if expired_composite_keys:
-                placeholders = ",".join("?" * len(expired_composite_keys))
-                r = db.execute(
-                    f"DELETE FROM final_poster_cache WHERE cache_key IN ({placeholders})",
-                    expired_composite_keys,
-                )
+            # Composites — fixed TTL in seconds
+            r = db.execute(
+                "DELETE FROM final_poster_cache WHERE cached_at < ?",
+                (now - COMPOSITE_CACHE_TTL,),
+            )
+            if r.rowcount:
                 logger.info(f"Pruned {r.rowcount} expired composite cache entries")
 
+            # Ratings / quality / metadata — use the most generous TTL so we
+            # never evict something that could still be considered fresh.
             rating_cutoff   = now - OLD_CACHE_DURATION           * 86400
             quality_cutoff  = now - QUALITY_OLD_CACHE_DURATION   * 86400
             metadata_cutoff = now - TMDB_METADATA_CACHE_DURATION * 86400
@@ -409,32 +549,107 @@ async def prune_caches() -> None:
             if r.rowcount:
                 logger.info(f"Pruned {r.rowcount} expired digital release cache entries")
 
+            release_status_cutoff = now - _RELEASE_STATUS_TTL_DAYS * 86400
+            r = db.execute(
+                "DELETE FROM release_status_cache WHERE cached_at < ?", (release_status_cutoff,)
+            )
+            if r.rowcount:
+                logger.info(f"Pruned {r.rowcount} expired release status cache entries")
+
+            detection_cutoff = now - 180 * 86400
+            r = db.execute(
+                "DELETE FROM text_detection_cache WHERE cached_at < ?", (detection_cutoff,)
+            )
+            if r.rowcount:
+                logger.info(f"Pruned {r.rowcount} old text-detection cache entries")
+
             db.commit()
 
-        with _db_lock:
-            get_db().execute("PRAGMA incremental_vacuum(100)")
-            get_db().commit()
-
-        # Phase 10: best-effort blob deletion for the composite rows we
-        # just evicted. Done outside the db lock + after commit so a
-        # slow S3 doesn't hold up the write lock.
-        for k in expired_composite_keys:
+        # Drop the blobs behind the expired composite rows (best effort).
+        for k in expired_composites:
             try:
                 await blobstore.delete(blobstore.BUCKET_COMPOSITES, k)
-            except Exception as exc:
-                logger.warning(f"Composite blob delete error for {k}: {exc}")
+            except Exception:
+                pass
+
+        _prune_file_cache(TMDB_POSTER_CACHE_DIR, TMDB_POSTER_CACHE_DURATION)
+        _prune_file_cache(TMDB_LOGO_CACHE_DIR, TMDB_LOGO_CACHE_DURATION)
+
+        # Reclaim free pages left by the deletes.
+        with _db_lock:
+            db = get_db()
+            auto_vac = db.execute("PRAGMA auto_vacuum").fetchone()[0]
+            if auto_vac == 2:   # INCREMENTAL — cheap, moves a few pages, no long lock
+                db.execute("PRAGMA incremental_vacuum(100)")
+                db.commit()
+            else:
+                # Legacy DB created before incremental auto-vacuum (auto_vacuum=0):
+                # the incremental pragma is a no-op there, so freed pages (e.g. from
+                # evicted composite JPEGs) never return and the file bloats.  Do a
+                # one-time conversion: enable INCREMENTAL then full VACUUM to rewrite
+                # the DB compactly.  Gated on meaningful dead space so it only fires
+                # when worthwhile, and it runs here in the background prune task
+                # (off the event loop), so it never blocks request handling.
+                page  = db.execute("PRAGMA page_size").fetchone()[0]
+                free  = db.execute("PRAGMA freelist_count").fetchone()[0]
+                total = db.execute("PRAGMA page_count").fetchone()[0]
+                live_mb = page * (total - free) / 1e6
+                if page * free > 20 * 1024 * 1024:   # >20 MB reclaimable
+                    # VACUUM rewrites ALL live data while holding an exclusive lock.
+                    # On a large live set that could exceed busy_timeout and lock out
+                    # the other worker process, so cap it: skip (and tell the operator
+                    # to VACUUM offline) when the live data is big.  Small DBs convert
+                    # in well under a second.  (After the first worker converts,
+                    # auto_vacuum becomes INCREMENTAL and every later prune takes the
+                    # cheap incremental path above, so this runs at most once.)
+                    if live_mb > 256:
+                        logger.warning(
+                            f"Cache DB has ~{page * free / 1e6:.0f} MB reclaimable but "
+                            f"{live_mb:.0f} MB live — skipping automatic VACUUM to avoid "
+                            f"a long exclusive lock. Reclaim offline with: "
+                            f"sqlite3 {DB_PATH} 'PRAGMA auto_vacuum=INCREMENTAL; VACUUM;'"
+                        )
+                    else:
+                        logger.info(
+                            f"Cache DB: one-time conversion to incremental auto-vacuum, "
+                            f"reclaiming ~{page * free / 1e6:.0f} MB of dead space "
+                            f"({live_mb:.0f} MB live)…"
+                        )
+                        db.commit()                   # close any open transaction
+                        db.execute("PRAGMA auto_vacuum=INCREMENTAL")
+                        db.execute("VACUUM")
+                        logger.info("Cache DB vacuum complete")
 
     except Exception as exc:
         logger.error(f"Cache prune error: {exc}")
 
 
-def get_cached_rating(imdb_id: str):
+# ---------------------------------------------------------------------------
+# Rating cache
+# ---------------------------------------------------------------------------
+
+def get_cached_rating(
+    imdb_id: str,
+) -> tuple[
+    dict[str, float], str, str | None,
+    list[str], list[str], bool,
+    str | None, int | None,
+    bool, bool, bool,
+] | None:
+    """
+    Returns an 11-tuple:
+        (ratings_dict, genre, release_date, award_wins, award_noms,
+         awards_fetched, festival_label, age_rating,
+         is_cult, is_true_story, is_metacritic)
+    Returns None if the row is absent or expired.
+    """
     try:
         row = get_db().execute(
             """
             SELECT ratings_json, genre, cached_at, release_date,
                    award_wins, award_noms, awards_fetched, festival_label,
-                   age_rating, is_cult, is_true_story, is_metacritic
+                   age_rating, is_cult, is_true_story, is_metacritic,
+                   rating_min_votes
             FROM rating_cache
             WHERE imdb_id = ?
             """,
@@ -446,7 +661,21 @@ def get_cached_rating(imdb_id: str):
 
         (ratings_json, genre, cached_at, release_date,
          wins_raw, noms_raw, awards_fetched_int, festival_label,
-         age_rating, is_cult_int, is_true_story_int, is_metacritic_int) = row
+         age_rating, is_cult_int, is_true_story_int, is_metacritic_int,
+         rating_min_votes) = row
+
+        if rating_min_votes is not None and rating_min_votes != RATING_MIN_VOTES:
+            logger.info(
+                f"Rating cache policy changed for {imdb_id}: "
+                f"stored={rating_min_votes!r}, current={RATING_MIN_VOTES}; refreshing"
+            )
+            with _db_lock:
+                get_db().execute(
+                    "DELETE FROM rating_cache WHERE imdb_id = ?",
+                    (imdb_id,),
+                )
+                get_db().commit()
+            return None
 
         age_days = (time.time() - cached_at) / 86400
 
@@ -459,6 +688,19 @@ def get_cached_rating(imdb_id: str):
                 )
                 get_db().commit()
             return None
+
+        if rating_min_votes is None:
+            # Rows created before policy tracking are still valid until their
+            # normal TTL expires. Backfill in place instead of consuming one
+            # MDBList request per legacy cache entry after an upgrade.
+            with _db_lock:
+                get_db().execute(
+                    "UPDATE rating_cache SET rating_min_votes = ? "
+                    "WHERE imdb_id = ? AND rating_min_votes IS NULL",
+                    (RATING_MIN_VOTES, imdb_id),
+                )
+                get_db().commit()
+            logger.debug(f"Backfilled rating cache policy for {imdb_id}")
 
         ratings_dict = json.loads(ratings_json or "{}")
         wins = [w for w in (wins_raw or "").split("|") if w]
@@ -506,9 +748,10 @@ def set_cached_rating(
                         age_rating,
                         is_cult,
                         is_true_story,
-                        is_metacritic
+                        is_metacritic,
+                        rating_min_votes
                     )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     imdb_id,
@@ -524,6 +767,7 @@ def set_cached_rating(
                     int(is_cult),
                     int(is_true_story),
                     int(is_metacritic),
+                    RATING_MIN_VOTES,
                 ),
             )
             get_db().commit()
@@ -531,6 +775,10 @@ def set_cached_rating(
     except Exception as exc:
         logger.error(f"Cache write error: {exc}")
 
+
+# ---------------------------------------------------------------------------
+# Quality cache
+# ---------------------------------------------------------------------------
 
 def get_cached_quality(imdb_id: str, release_date: str | None = None) -> list[str] | None:
     try:
@@ -577,6 +825,15 @@ def set_cached_quality(
     except Exception as exc:
         logger.error(f"Quality cache write error: {exc}")
 
+
+# ---------------------------------------------------------------------------
+# Trending cache  (snapshot-based — one row per media type)
+#
+# NOTE: The old per-item get_cached_trending / set_cached_trending helpers
+# referenced columns ("rank", "tmdb_id") that never existed in the actual
+# schema and always raised OperationalError at runtime.  They are removed.
+# All callers use get_cached_trending_snapshot / set_cached_trending_snapshot.
+# ---------------------------------------------------------------------------
 
 def get_cached_trending_snapshot(media_type: str) -> dict[str, int] | None:
     try:
@@ -628,38 +885,57 @@ def set_cached_trending_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# TMDB poster/logo cache — local filesystem, per-pod ephemeral.
-#
-# Phase 10: reverted from blobstore delegation. TMDB's own CDN is the
-# source of truth; this cache is just a latency-optimisation in front of
-# image.tmdb.org. Sharing it across replicas via S3 buys very little and
-# complicates the data path. On pod restart the cache re-warms in the
-# first few minutes of traffic.
-#
-# Synchronous (matching upstream's shape) so cherry-picks from upstream's
-# cache.py apply with minimal churn.
+# Filesystem cache helpers
 # ---------------------------------------------------------------------------
 
-def _safe_cache_path(base_dir: str, filename: str) -> str:
-    path = os.path.realpath(os.path.join(base_dir, filename))
-    if not path.startswith(os.path.realpath(base_dir)):
-        raise ValueError(f"Path traversal attempt: {filename!r}")
-    return path
+def _atomic_write(path: str, data: bytes) -> None:
+    """Atomically replace *path* so readers never observe partial image bytes."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=os.path.dirname(path), prefix=".tmp-", delete=False
+        ) as tmp:
+            temp_path = tmp.name
+            tmp.write(data)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
-def _remove_if_dir(path: str) -> bool:
-    """Remove *path* if it is a directory (stale artefact from a previous bug)."""
-    if os.path.isdir(path):
-        try:
-            os.rmdir(path)
-            logger.info(f"Removed stale cache directory at {path}")
-        except OSError:
-            pass
-        return True
-    return False
+def _prune_file_cache(base_dir: str, ttl_days: int) -> None:
+    cutoff = time.time() - ttl_days * 86400
+    removed = 0
+    try:
+        for entry in os.scandir(base_dir):
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            try:
+                if entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                    os.remove(entry.path)
+                    removed += 1
+            except FileNotFoundError:
+                pass
+        if removed:
+            logger.info(f"Pruned {removed} expired files from {base_dir}")
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning(f"File-cache prune failed for {base_dir}: {exc}")
 
+
+# ---------------------------------------------------------------------------
+# TMDB poster cache
+# ---------------------------------------------------------------------------
 
 def get_cached_tmdb_poster(cache_key: str) -> bytes | None:
+    # Extension is now .jpg — posters are stored as JPEG for faster decode.
     path = _safe_cache_path(TMDB_POSTER_CACHE_DIR, cache_key)
 
     if not os.path.exists(path):
@@ -684,13 +960,30 @@ def get_cached_tmdb_poster(cache_key: str) -> bytes | None:
 
 
 def set_cached_tmdb_poster(cache_key: str, data: bytes) -> None:
+    # Store as .jpg — written by tmdb.py as JPEG q=92 RGB, then converted
+    # back to RGBA on load.  ~4x faster decode vs PNG, ~5x smaller on disk.
     try:
         path = _safe_cache_path(TMDB_POSTER_CACHE_DIR, cache_key)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(data)
+        _atomic_write(path, data)
     except Exception as exc:
         logger.error(f"TMDB poster cache write error: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# TMDB logo cache
+# ---------------------------------------------------------------------------
+
+def _remove_if_dir(path: str) -> bool:
+    """Remove *path* if it is a directory (stale artefact from a previous bug).
+    Returns True if a directory was found and removed."""
+    if os.path.isdir(path):
+        try:
+            os.rmdir(path)
+            logger.info(f"Removed stale cache directory at {path}")
+        except OSError:
+            pass
+        return True
+    return False
 
 
 def get_cached_tmdb_logo(cache_key: str) -> bytes | None:
@@ -724,11 +1017,22 @@ def set_cached_tmdb_logo(cache_key: str, data: bytes) -> None:
     try:
         path = _safe_cache_path(TMDB_LOGO_CACHE_DIR, cache_key)
         _remove_if_dir(path)
-        with open(path, "wb") as f:
-            f.write(data)
+        _atomic_write(path, data)
     except Exception as exc:
         logger.error(f"TMDB logo cache write error: {exc}")
 
+def _safe_cache_path(base_dir: str, filename: str) -> str:
+    if os.path.isabs(filename):
+        raise ValueError(f"Absolute cache path rejected: {filename!r}")
+    base = os.path.realpath(base_dir)
+    path = os.path.realpath(os.path.join(base, filename))
+    if os.path.commonpath((base, path)) != base:
+        raise ValueError(f"Path traversal attempt: {filename!r}")
+    return path
+
+# ---------------------------------------------------------------------------
+# TMDB metadata cache
+# ---------------------------------------------------------------------------
 
 def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
     try:
@@ -738,7 +1042,9 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
                    logos_json, cached_at,
                    credits_json, production_cos_json,
                    runtime, number_of_seasons, number_of_episodes,
-                   original_language, backdrop_path
+                   original_language, original_title, backdrop_path, tmdb_status, vote_count,
+                   text_backdrop_path, original_poster_path,
+                   poster_langs_json
             FROM tmdb_metadata_cache
             WHERE cache_key = ?
             """,
@@ -752,12 +1058,27 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
             logos_json, cached_at,
             credits_json, production_cos_json,
             runtime, number_of_seasons, number_of_episodes,
-            original_language, backdrop_path,
+            original_language, original_title, backdrop_path, tmdb_status, vote_count,
+            text_backdrop_path, original_poster_path,
+            poster_langs_json,
         ) = row
 
         age_days = (time.time() - cached_at) / 86400
         if age_days > TMDB_METADATA_CACHE_DURATION:
             logger.info(f"TMDB metadata cache expired for {cache_key} ({age_days:.1f}d old)")
+            with _db_lock:
+                get_db().execute(
+                    "DELETE FROM tmdb_metadata_cache WHERE cache_key = ?", (cache_key,)
+                )
+                get_db().commit()
+            return None
+
+        # Rows created before vote_count or original_title was added were migrated
+        # with NULL. Refresh once so detection has complete title aliases.
+        if vote_count is None or original_title is None:
+            logger.info(
+                f"TMDB metadata cache missing vote_count or original_title for {cache_key}; refreshing"
+            )
             with _db_lock:
                 get_db().execute(
                     "DELETE FROM tmdb_metadata_cache WHERE cache_key = ?", (cache_key,)
@@ -778,7 +1099,13 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
             "number_of_seasons":    number_of_seasons,
             "number_of_episodes":   number_of_episodes,
             "original_language":    original_language,
+            "original_title":       original_title,
             "backdrop_path":        backdrop_path,
+            "tmdb_status":          tmdb_status,
+            "vote_count":           vote_count,
+            "text_backdrop_path":   text_backdrop_path,
+            "original_poster_path": original_poster_path,
+            "poster_langs":         json.loads(poster_langs_json or "{}"),
         }
     except Exception as exc:
         logger.error(f"TMDB metadata cache read error: {exc}")
@@ -797,10 +1124,16 @@ def set_cached_tmdb_metadata(
     credits: dict | None = None,
     production_companies: list[dict] | None = None,
     original_language: str | None = None,
+    original_title: str | None = None,
     runtime: int | None = None,
     number_of_seasons: int | None = None,
     number_of_episodes: int | None = None,
     backdrop_path: str | None = None,
+    tmdb_status: str | None = None,
+    vote_count: int | None = None,
+    text_backdrop_path: str | None = None,
+    original_poster_path: str | None = None,
+    poster_langs: dict | None = None,
 ) -> None:
     try:
         with _db_lock:
@@ -811,8 +1144,10 @@ def set_cached_tmdb_metadata(
                      poster_path, logos_json, cached_at,
                      credits_json, production_cos_json,
                      runtime, number_of_seasons, number_of_episodes,
-                     original_language, backdrop_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     original_language, original_title, backdrop_path, tmdb_status, vote_count,
+                     text_backdrop_path, original_poster_path,
+                     poster_langs_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cache_key,
@@ -829,7 +1164,13 @@ def set_cached_tmdb_metadata(
                     number_of_seasons,
                     number_of_episodes,
                     original_language,
+                    original_title,
                     backdrop_path,
+                    tmdb_status,
+                    vote_count,
+                    text_backdrop_path,
+                    original_poster_path,
+                    json.dumps(poster_langs or {}),
                 ),
             )
             get_db().commit()
@@ -838,6 +1179,7 @@ def set_cached_tmdb_metadata(
 
 
 def delete_cached_tmdb_metadata(cache_key: str) -> None:
+    """Remove a single TMDB metadata entry so the next request re-fetches from TMDB."""
     try:
         with _db_lock:
             get_db().execute(
@@ -849,7 +1191,12 @@ def delete_cached_tmdb_metadata(cache_key: str) -> None:
         logger.error(f"TMDB metadata cache delete error: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# Digital release cache
+# ---------------------------------------------------------------------------
+
 def is_digital_release(imdb_id: str) -> bool:
+    """Return True if the IMDB ID has a matching entry in the digital release cache."""
     try:
         row = get_db().execute(
             "SELECT 1 FROM digital_release_cache WHERE imdb_id = ?", (imdb_id,)
@@ -860,18 +1207,11 @@ def is_digital_release(imdb_id: str) -> bool:
         return False
 
 
-def count_digital_releases() -> int:
-    try:
-        (count,) = get_db().execute(
-            "SELECT COUNT(*) FROM digital_release_cache"
-        ).fetchone()
-        return count
-    except Exception as exc:
-        logger.error(f"Digital release cache count error: {exc}")
-        return 0
-
-
 def add_digital_releases(entries: list[tuple[str, int]]) -> int:
+    """
+    Insert (imdb_id, posted_at) pairs. Uses INSERT OR IGNORE so the
+    original posted_at is never overwritten. Returns the number of new rows inserted.
+    """
     if not entries:
         return 0
     inserted = 0
@@ -889,8 +1229,105 @@ def add_digital_releases(entries: list[tuple[str, int]]) -> int:
     return inserted
 
 
+# ---------------------------------------------------------------------------
+# Release status cache
+# ---------------------------------------------------------------------------
+# Cached separately from main metadata so the extra TMDB /release_dates call
+# only happens for users who have enabled the "release_status" sash slot.
+# TTL: 7 days — status changes slowly (Cinema → Streaming → BluRay is one-way).
+
+_RELEASE_STATUS_TTL_DAYS = 7
+
+
+def get_cached_release_status(cache_key: str) -> str | None:
+    """Return the cached release status string, or None if absent / expired."""
+    try:
+        row = get_db().execute(
+            "SELECT status, cached_at FROM release_status_cache WHERE cache_key = ?",
+            (cache_key,),
+        ).fetchone()
+        if not row:
+            return None
+        status, cached_at = row
+        age_days = (time.time() - cached_at) / 86400
+        if age_days > _RELEASE_STATUS_TTL_DAYS:
+            logger.info(f"Release status cache expired for {cache_key} ({age_days:.1f}d old)")
+            return None
+        return status
+    except Exception as exc:
+        logger.error(f"Release status cache read error: {exc}")
+        return None
+
+
+def set_cached_release_status(cache_key: str, status: str) -> None:
+    """Upsert a release status entry."""
+    try:
+        with _db_lock:
+            get_db().execute(
+                """
+                INSERT INTO release_status_cache (cache_key, status, cached_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET status=excluded.status, cached_at=excluded.cached_at
+                """,
+                (cache_key, status, int(time.time())),
+            )
+            get_db().commit()
+    except Exception as exc:
+        logger.error(f"Release status cache write error: {exc}")
+
+
+def get_cached_text_detection(cache_key: str) -> bool | None:
+    """Return the cached burned-in-text result (True/False), or None if absent.
+
+    Results never expire — they're keyed by an immutable TMDB image path plus the
+    detection params, so the answer can't change for a given key.
+    """
+    try:
+        row = get_db().execute(
+            "SELECT has_text FROM text_detection_cache WHERE cache_key = ?",
+            (cache_key,),
+        ).fetchone()
+        return None if row is None else bool(row[0])
+    except Exception as exc:
+        logger.error(f"Text-detection cache read error: {exc}")
+        return None
+
+
+def set_cached_text_detection(cache_key: str, has_text: bool) -> None:
+    """Upsert a burned-in-text detection result."""
+    try:
+        with _db_lock:
+            get_db().execute(
+                """
+                INSERT INTO text_detection_cache (cache_key, has_text, cached_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET has_text=excluded.has_text, cached_at=excluded.cached_at
+                """,
+                (cache_key, int(has_text), int(time.time())),
+            )
+            get_db().commit()
+    except Exception as exc:
+        logger.error(f"Text-detection cache write error: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# ElfHosted fork additions
+# ---------------------------------------------------------------------------
+
+def count_digital_releases() -> int:
+    """Row count for the digital-release cache — surfaced on /stats."""
+    try:
+        (count,) = get_db().execute(
+            "SELECT COUNT(*) FROM digital_release_cache"
+        ).fetchone()
+        return count
+    except Exception as exc:
+        logger.error(f"Digital release cache count error: {exc}")
+        return 0
+
+
 def get_cached_imdb_to_tmdb(imdb_id: str, media_type: str) -> str | None:
-    """Phase 11: look up the cached tmdb_id for an imdb_id + media_type."""
+    """Look up the cached tmdb_id for an imdb_id + media_type (no TTL)."""
     try:
         row = get_db().execute(
             "SELECT tmdb_id FROM imdb_to_tmdb_cache WHERE imdb_id = ? AND media_type = ?",
@@ -903,10 +1340,12 @@ def get_cached_imdb_to_tmdb(imdb_id: str, media_type: str) -> str | None:
 
 
 def set_cached_imdb_to_tmdb(imdb_id: str, media_type: str, tmdb_id: str) -> None:
+    """Upsert an imdb_id -> tmdb_id mapping."""
     try:
         with _db_lock:
             get_db().execute(
-                "INSERT OR REPLACE INTO imdb_to_tmdb_cache (imdb_id, media_type, tmdb_id) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO imdb_to_tmdb_cache (imdb_id, media_type, tmdb_id) "
+                "VALUES (?, ?, ?)",
                 (imdb_id, media_type, tmdb_id),
             )
             get_db().commit()
@@ -915,7 +1354,7 @@ def set_cached_imdb_to_tmdb(imdb_id: str, media_type: str, tmdb_id: str) -> None
 
 
 def ping() -> bool:
-    """Cheap connectivity check for /ready probes (Phase 4)."""
+    """Cheap connectivity check for /ready probes."""
     try:
         get_db().execute("SELECT 1").fetchone()
         return True
@@ -924,11 +1363,18 @@ def ping() -> bool:
 
 
 def close() -> None:
-    """Close the connection. Called from lifespan shutdown."""
-    global _db_conn
-    if _db_conn is not None:
+    """Close this thread's connection. Called from lifespan shutdown.
+
+    Connections are thread-local (see get_db); closing the calling thread's
+    handle is sufficient for a clean shutdown — others are dropped when their
+    threads end. Flips _initialised so a late get_db() fails loudly rather
+    than resurrecting a half-torn-down connection."""
+    global _initialised
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
         try:
-            _db_conn.close()
-        except Exception as exc:
-            logger.warning(f"SQLite close error: {exc}")
-        _db_conn = None
+            conn.close()
+        except Exception:
+            pass
+        _local.conn = None
+    _initialised = False

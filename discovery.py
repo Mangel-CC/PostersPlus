@@ -6,20 +6,27 @@ priority one to show, based on a caller-supplied ordered list.
 
 Priority slots
 --------------
-wins        Best Picture win / Emmy win
-pic_noms    Best Picture nomination (high selectivity — ~5-10 films/year)
-festival    Major international festival winner (Cannes, Berlin, Venice, Sundance, …)
-studio      Produced by a notable studio (A24, Pixar, …)
-director    Directed by a notable filmmaker
-cast        Stars a notable actor / actress
-metacritic  Metacritic Must-See badge (curated critical acclaim)
-cult        Cult Classic / Cult Film (MDblist keyword)
-trending    Currently trending on TMDB
-true_story  Based on a true story (MDblist keyword)
-foreign     Non-English original language film
-structural  Short Film | Mini Series | Binge Ready (whichever matches first)
-new_release Newly released (digital/premiere within the last 14 days)
-emmy_noms   Emmy nomination (broad — last resort)
+wins         Oscar Best Picture win / Major Emmy (Outstanding) Series win
+gg_wins      Golden Globe win (all top film + TV categories)
+festival     Major international festival winner (Cannes, Berlin, Venice, Sundance, …)
+pic_noms     Best Picture nomination (film) / Major Emmy nomination (TV)
+gg_noms      Golden Globe nomination (all top film + TV categories)
+studio       Produced by a notable studio (A24, Pixar, …)
+director     Directed by a notable filmmaker
+cast         Stars a notable actor / actress
+trending     Currently trending on TMDB
+cult         Cult Classic / Cult Film (MDblist keyword)
+foreign      Non-English original language film
+new_release  Newly released — digital/premiere within the last 14 days, or a
+             confirmed r/movieleaks digital-release post
+metacritic   Metacritic Must-See badge (curated critical acclaim)
+true_story   Based on a true story (MDblist keyword)
+structural   Short Film | Mini Series | Binge Ready (whichever matches first)
+
+Legacy aliases (still accepted in sash_priority for backward-compat with old URLs):
+    emmy_noms       → pic_noms
+    digital_release → new_release
+    noms            → any nomination (catch-all)
 
 All facts are stored in DiscoveryMeta so they only need to be computed once
 and can be re-prioritised at render time without re-fetching.
@@ -262,6 +269,7 @@ _SASH_TYPES: dict[str, str] = {
     "pic_noms":        "nom",       # silver — Best Picture nom + Major Emmy nom (film vs TV, never coexist)
     "gg_noms":         "nom",       # silver — Golden Globe nomination
     "emmy_noms":       "nom",       # silver — legacy alias for pic_noms
+    "noms":            "nom",       # silver — legacy catch-all for any nomination
     "festival":        "win",       # gold — major festival win is prestige-equivalent to Oscar
     "studio":          "prestige",  # purple — production credit
     "director":        "prestige",  # purple — production credit
@@ -269,11 +277,12 @@ _SASH_TYPES: dict[str, str] = {
     "trending":        "trending",  # blue
     "cult":            "trending",  # blue — popularity signal, closest to trending without a new colour
     "foreign":         "info",      # teal — informational / discovery
-    "new_release":     "info",      # teal — newly streaming (release date or r/movieleaks)
-    "digital_release": "info",      # teal — legacy alias for new_release
+    "new_release":     "alert",     # red — newly streaming (release date or r/movieleaks)
+    "digital_release": "alert",     # red — legacy alias for new_release
     "metacritic":      "nom",       # silver — critical award, fits with noms not production
     "true_story":      "info",      # teal
     "structural":      "info",      # teal
+    "release_status":  "alert",     # red — Physical / Streaming / Cinema / Production
 }
 
 NEW_RELEASE_DAYS = 14
@@ -332,6 +341,11 @@ class DiscoveryMeta:
     # Digital release (from r/movieleaks poller — movies only)
     is_digital_release: bool = False
 
+    # Release status — populated on demand when "release_status" is in sash_priority.
+    # Movies: "Physical" | "Streaming" | "Cinema" | "Production"
+    # TV:     "Returning" | "Ended" | "Cancelled" | "Production"
+    release_status: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # Extraction helpers
@@ -351,6 +365,7 @@ def extract_discovery_meta(
     is_true_story_override:   bool | None = None,
     is_metacritic_override:   bool | None = None,
     is_digital_release_override: bool | None = None,
+    release_status_override: str | None = None,
     notable_studios:   dict[str, str] | None = None,
     notable_directors: dict[str, str] | None = None,
     notable_cast:      dict[str, str] | None = None,
@@ -406,6 +421,9 @@ def extract_discovery_meta(
 
     if is_digital_release_override is not None:
         meta.is_digital_release = is_digital_release_override
+
+    if release_status_override is not None:
+        meta.release_status = release_status_override
 
     # --- Studios ---
     for company in tmdb_data.get("production_companies", []):
@@ -536,7 +554,7 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
         # "digital_release" is kept as a legacy alias so old sash_priority params
         # still work — both slots check the same combined condition.
         if meta.is_new_release or meta.is_digital_release:
-            return "Newly Streaming"
+            return "New"
         return None
 
     if slot == "metacritic":
@@ -554,6 +572,9 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
             if key == "mini_series" and meta.is_mini_series:  return _STRUCTURAL_LABELS[key]
             if key == "binge_ready" and meta.is_binge_ready:  return _STRUCTURAL_LABELS[key]
         return None
+
+    if slot == "release_status":
+        return meta.release_status  # already a display string or None
 
     return None
 
@@ -581,6 +602,7 @@ ALL_PRIORITY_SLOTS: list[str] = [
     "emmy_noms",        # legacy alias for pic_noms — still accepted in sash_priority param
     "digital_release",  # legacy alias for new_release
     "noms",             # legacy alias for any nomination
+    "release_status",   # opt-in: Blu-ray / Streaming / Cinema / Production — requires extra API call for movies
 ]
 
 

@@ -45,6 +45,12 @@ _PUBLIC_API = (
     "add_digital_releases",
     "get_cached_imdb_to_tmdb",
     "set_cached_imdb_to_tmdb",
+    # Upstream v1.1.0 additions:
+    "get_cached_release_status",
+    "set_cached_release_status",
+    "get_cached_text_detection",
+    "set_cached_text_detection",
+    "get_cache_stats",
 )
 
 

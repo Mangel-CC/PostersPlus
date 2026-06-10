@@ -1,125 +1,422 @@
-"""Phase 11: named preset bundles for the anonymous public tier.
+"""Named visual presets for the anonymous public tier (ElfHosted fork).
 
-The public preset endpoint ``/p/{preset}/{type}/{imdb_id}.jpg`` resolves
-the preset name to a fixed ``raw_params`` dict, then runs the same
-render pipeline as ``/poster`` but with a few simplifications that make
-it CDN-cacheable and quota-safe:
+The public preset endpoint ``/p/{preset}/{type}/{imdb_id}.jpg`` resolves a
+preset name to a fixed ``raw_params`` dict, then runs the SAME render
+pipeline as ``/poster`` — but the route enforces a set of quota- and
+overload-safety invariants that make every anonymous hit cheap and
+CDN-cacheable, REGARDLESS of what a preset's params request:
 
-  * No per-user TMDB / MDBlist keys — the operator's server keys are used.
-  * No access_key gating — the endpoint is anonymous (the operator
-    decides whether to expose it by setting ``PRESET_ENABLED``).
-  * No active quality-badge fetch — badges only render from cached
-    AIOStreams data (``badge_display_mode=1``) so an anonymous poster
-    load can't fan out into per-title stream lookups.
+  * No per-user keys — the operator's server TMDB/MDBList keys are used.
+  * No access_key gating — anonymous (the operator opts in via PRESET_ENABLED).
+  * Rating + quality data are used ONLY if already cached — an anonymous
+    hit never fans out to MDBList or AIOStreams.
+  * Burned-in-text (PP-OCRv5) detection is used ONLY if already cached — an
+    anonymous hit never triggers a foreground OCR scan; uncached titles are
+    queued to the background detector and served without the OCR-dependent
+    poster swap, with a short Cache-Control so the CDN isn't poisoned.
+  * All preset traffic shares one operator-wide "preset" rate-limit bucket.
 
-Presets are intentionally small and grep-able. Each value is a string
-because ``build_request_config`` parses raw query-param strings; that
-keeps the public preset path bit-for-bit equivalent to a /poster call
-with the same params.
-
-Adding a preset: append to ``PRESETS`` below, add a one-line
-description, and the new key is immediately reachable as
-``/p/<name>/...``. Keep names URL-safe lowercase + dashes.
+These presets mirror upstream's configurator preset GALLERY one-for-one
+(same ids, same params), so a /p/<id> URL renders the same look as picking
+that gallery card — the public tier exposes exactly the curated set, while
+authenticated tenants keep the full configurator. Keep this list and the
+``PRESETS`` array in configurator.html in sync.
 
 Cherry-pick guide:
-  * Upstream has no equivalent — this is an ElfHosted-only module.
-  * The preset dicts are pure data; nothing about them couples to the
-    rest of the codebase, so renaming or retuning a preset is a
-    one-file change.
+  * Upstream has no server-side preset route — this whole module + the /p
+    handler are ElfHosted-only. The param dicts are pure data extracted from
+    the gallery; retuning a preset is a one-file change here (mirror it in
+    configurator.html's PRESETS so the gallery card matches).
 """
 from __future__ import annotations
 
 
-# Common base applied to every preset. Public-tier defaults:
-#   * Mode 4 quality indicator (cheap vertical tier-bar pill — much
-#     lighter render cost than mode 1 age-rating numeral or mode 2
-#     full badge row). Cached badges only; never AIOStreams fan-out on
-#     anonymous hits.
-#   * Sash on by default (the curated discovery-override dataset is
-#     the moat — every public hit gets a chance to show a festival or
-#     director sash).
-#
-# Presets pick a small number of axes that meaningfully differ visually
-# while keeping render cost low. The endpoint hashes raw_params into a
-# short params_hash, so fewer distinct presets = fewer composite cache
-# entries per (imdb_id, type) = better cache hit rate at the edge.
-_PUBLIC_BASE: dict[str, str] = {
-    "badge_display_mode": "4",
-    "show_award_sash":    "true",
+# Each value is the preset's render params as strings (build_request_config
+# parses raw query-param strings), keeping a /p call bit-for-bit equivalent
+# to the matching gallery selection. tmdb_id/imdb_id/type are supplied by the
+# route path and are intentionally absent here.
+PRESETS: dict[str, dict[str, str]] = {
+    'prestige_rating_bar': {
+        'primary_client': 'stremio_tv_nuvio',
+        'top_gradient': 'medium',
+        'bottom_gradient': 'high',
+        'fallback_to_imdb': 'true',
+        'rating_display_mode': '1',
+        'score_color_mode': '2',
+        'accent_bar_font_size_ratio': '0.080',
+        'accent_bar_y_offset': '0.90',
+        'accent_bar_append_mode': '0',
+        'accent_bar_bottom_ratio': '0.040',
+        'score_glow_threshold': '85',
+        'score_glow_blur': '1',
+        'score_glow_alpha': '40',
+        'movie_weights': 'letterboxd:0.99,trakt:0.01,tomatoes:0.00,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,rogerebert:0.00,myanimelist:0.00',
+        'tv_weights': 'trakt:0.80,tomatoes:0.20,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,myanimelist:0.00',
+        'textless': 'false',
+        'use_original_art': 'false',
+        'original_art_source': 'primary',
+        'logo_language': 'en',
+        'logo_priority': 'native_original',
+        'fallback_bg_style': 'photoreal',
+        'logo_max_w_ratio': '0.75',
+        'logo_max_h_ratio': '0.25',
+        'logo_bottom_ratio': '0.28',
+        'sash_mode': 'sash',
+        'cinema_greyscale': 'true',
+        'cinema_greyscale_skip_if_available': 'false',
+        'release_status_cinema_only': 'true',
+        'muted': 'false',
+        'sash_poster_color': 'false',
+        'sash_length_ratio': '1.20',
+        'sash_height_ratio': '0.135',
+        'sash_priority': 'wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,cult,foreign,new_release,metacritic,true_story,structural,release_status',
+        'badge_display_mode': '5',
+        'badge_height': '28',
+        'badge_anchor_x': '0.060',
+        'badge_anchor_y': '0.045',
+        'badge_min_score': '5',
+    },
+    'light_rating_bar': {
+        'primary_client': 'stremio_tv_nuvio',
+        'top_gradient': 'medium',
+        'bottom_gradient': 'high',
+        'fallback_to_imdb': 'true',
+        'rating_display_mode': '1',
+        'score_color_mode': '0',
+        'accent_bar_font_size_ratio': '0.080',
+        'accent_bar_y_offset': '0.90',
+        'accent_bar_append_mode': '0',
+        'accent_bar_bottom_ratio': '0.040',
+        'score_glow_threshold': '85',
+        'score_glow_blur': '1',
+        'score_glow_alpha': '40',
+        'movie_weights': 'letterboxd:0.99,trakt:0.01,tomatoes:0.00,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,rogerebert:0.00,myanimelist:0.00',
+        'tv_weights': 'trakt:0.80,tomatoes:0.20,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,myanimelist:0.00',
+        'textless': 'false',
+        'use_original_art': 'false',
+        'original_art_source': 'primary',
+        'logo_language': 'en',
+        'logo_priority': 'native_original',
+        'fallback_bg_style': 'photoreal',
+        'logo_max_w_ratio': '0.75',
+        'logo_max_h_ratio': '0.25',
+        'logo_bottom_ratio': '0.28',
+        'sash_mode': 'notch',
+        'cinema_greyscale': 'true',
+        'cinema_greyscale_skip_if_available': 'false',
+        'release_status_cinema_only': 'true',
+        'sash_badge_style': 'frosted',
+        'sash_badge_size_w': '1.40',
+        'sash_badge_size_h': '1.20',
+        'sash_badge_font_ratio': '0.43',
+        'sash_badge_frost_opacity': '0.75',
+        'sash_priority': 'wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,cult,foreign,new_release,metacritic,true_story,structural,release_status',
+        'badge_display_mode': '4',
+        'badge_height': '20',
+        'badge_anchor_x': '0.060',
+        'badge_anchor_y': '0.045',
+        'badge_min_score': '5',
+    },
+    'clean_sash': {
+        'primary_client': 'stremio_tv_nuvio',
+        'top_gradient': 'medium',
+        'bottom_gradient': 'high',
+        'fallback_to_imdb': 'true',
+        'rating_display_mode': '2',
+        'numeric_score_font_size_ratio': '0.100',
+        'numeric_score_y_offset': '0.90',
+        'score_out_of_10': 'false',
+        'movie_weights': 'letterboxd:0.99,trakt:0.01,tomatoes:0.00,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,rogerebert:0.00,myanimelist:0.00',
+        'tv_weights': 'trakt:0.80,tomatoes:0.20,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,myanimelist:0.00',
+        'textless': 'false',
+        'use_original_art': 'false',
+        'original_art_source': 'primary',
+        'logo_language': 'en',
+        'logo_priority': 'native_original',
+        'fallback_bg_style': 'photoreal',
+        'logo_max_w_ratio': '0.75',
+        'logo_max_h_ratio': '0.25',
+        'logo_bottom_ratio': '0.28',
+        'sash_mode': 'sash',
+        'cinema_greyscale': 'true',
+        'cinema_greyscale_skip_if_available': 'false',
+        'release_status_cinema_only': 'true',
+        'muted': 'false',
+        'sash_poster_color': 'false',
+        'sash_length_ratio': '1.20',
+        'sash_height_ratio': '0.135',
+        'sash_priority': 'wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,cult,foreign,new_release,metacritic,true_story,structural,release_status',
+        'badge_display_mode': '1',
+        'badge_height': '36',
+        'badge_anchor_x': '0.060',
+        'badge_anchor_y': '0.055',
+        'badge_min_score': '2',
+    },
+    'clean_notch': {
+        'top_gradient': 'medium',
+        'bottom_gradient': 'high',
+        'fallback_to_imdb': 'true',
+        'rating_display_mode': '2',
+        'numeric_score_font_size_ratio': '0.100',
+        'numeric_score_y_offset': '0.90',
+        'score_out_of_10': 'false',
+        'movie_weights': 'letterboxd:0.99,trakt:0.01,tomatoes:0.00,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,rogerebert:0.00,myanimelist:0.00',
+        'tv_weights': 'trakt:0.80,tomatoes:0.20,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,myanimelist:0.00',
+        'textless': 'false',
+        'use_original_art': 'false',
+        'original_art_source': 'primary',
+        'logo_language': 'en',
+        'logo_priority': 'native_original',
+        'fallback_bg_style': 'photoreal',
+        'logo_max_w_ratio': '0.75',
+        'logo_max_h_ratio': '0.25',
+        'logo_bottom_ratio': '0.28',
+        'show_award_sash': 'true',
+        'sash_badge': 'true',
+        'sash_badge_style': 'frosted',
+        'sash_badge_size_w': '1.40',
+        'sash_badge_size_h': '1.20',
+        'sash_badge_font_ratio': '0.43',
+        'sash_badge_frost_opacity': '0.75',
+        'sash_priority': 'wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,cult,foreign,new_release,metacritic,true_story,structural,release_status',
+        'badge_display_mode': '0',
+        'cinema_greyscale': 'true',
+        'release_status_cinema_only': 'true',
+    },
+    'mini': {
+        'primary_client': 'stremio_tv_nuvio',
+        'top_gradient': 'medium',
+        'bottom_gradient': 'high',
+        'fallback_to_imdb': 'true',
+        'rating_display_mode': '3',
+        'score_color_mode': '0',
+        'minimalist_append_mode': '0',
+        'minimalist_mode_font_size_ratio': '0.056',
+        'minimalist_mode_font_x_offset': '0.065',
+        'minimalist_mode_font_y_offset': '0.920',
+        'movie_weights': 'letterboxd:0.99,trakt:0.01,tomatoes:0.00,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,rogerebert:0.00,myanimelist:0.00',
+        'tv_weights': 'trakt:0.80,tomatoes:0.20,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,myanimelist:0.00',
+        'textless': 'false',
+        'use_original_art': 'false',
+        'original_art_source': 'primary',
+        'logo_language': 'en',
+        'logo_priority': 'native_original',
+        'fallback_bg_style': 'photoreal',
+        'logo_max_w_ratio': '0.75',
+        'logo_max_h_ratio': '0.25',
+        'logo_bottom_ratio': '0.28',
+        'sash_mode': 'sash',
+        'cinema_greyscale': 'true',
+        'cinema_greyscale_skip_if_available': 'false',
+        'release_status_cinema_only': 'true',
+        'muted': 'false',
+        'sash_poster_color': 'false',
+        'sash_length_ratio': '1.15',
+        'sash_height_ratio': '0.120',
+        'sash_priority': 'wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,cult,foreign,new_release,metacritic,true_story,structural,release_status',
+        'badge_display_mode': '5',
+        'badge_height': '28',
+        'badge_anchor_x': '0.060',
+        'badge_anchor_y': '0.045',
+        'badge_min_score': '5',
+    },
+    'frosted_notch': {
+        'top_gradient': 'medium',
+        'bottom_gradient': 'high',
+        'fallback_to_imdb': 'true',
+        'rating_display_mode': '4',
+        'bar_style': 'frosted',
+        'bar_append': 'rating_year',
+        'bar_score_out_of_10': 'false',
+        'bar_match_notch': 'true',
+        'bar_height_ratio': '0.080',
+        'bar_font_size_ratio': '0.55',
+        'bar_frost_opacity': '0.85',
+        'movie_weights': 'letterboxd:0.99,trakt:0.01,tomatoes:0.00,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,rogerebert:0.00,myanimelist:0.00',
+        'tv_weights': 'trakt:0.80,tomatoes:0.20,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,myanimelist:0.00',
+        'textless': 'false',
+        'use_original_art': 'false',
+        'original_art_source': 'primary',
+        'logo_language': 'en',
+        'logo_priority': 'native_original',
+        'fallback_bg_style': 'photoreal',
+        'logo_max_w_ratio': '0.75',
+        'logo_max_h_ratio': '0.25',
+        'logo_bottom_ratio': '0.28',
+        'show_award_sash': 'true',
+        'cinema_greyscale': 'true',
+        'release_status_cinema_only': 'true',
+        'sash_badge': 'true',
+        'sash_badge_style': 'frosted',
+        'sash_badge_size_w': '1.40',
+        'sash_badge_size_h': '1.20',
+        'sash_badge_font_ratio': '0.43',
+        'sash_badge_frost_opacity': '0.75',
+        'sash_priority': 'wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,cult,foreign,new_release,metacritic,true_story,structural,release_status',
+        'badge_display_mode': '0',
+    },
+    'black_rating_bar_light_notch': {
+        'top_gradient': 'medium',
+        'bottom_gradient': 'high',
+        'fallback_to_imdb': 'true',
+        'rating_display_mode': '4',
+        'bar_style': 'rating_black',
+        'bar_accent': 'palette_0',
+        'bar_append': 'rating_year',
+        'bar_score_out_of_10': 'false',
+        'bar_height_ratio': '0.080',
+        'bar_font_size_ratio': '0.55',
+        'bar_frost_opacity': '0.85',
+        'movie_weights': 'letterboxd:0.99,trakt:0.01,tomatoes:0.00,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,rogerebert:0.00,myanimelist:0.00',
+        'tv_weights': 'trakt:0.80,tomatoes:0.20,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,myanimelist:0.00',
+        'textless': 'false',
+        'use_original_art': 'false',
+        'original_art_source': 'primary',
+        'logo_language': 'en',
+        'logo_priority': 'native_original',
+        'fallback_bg_style': 'photoreal',
+        'logo_max_w_ratio': '0.75',
+        'logo_max_h_ratio': '0.25',
+        'logo_bottom_ratio': '0.28',
+        'show_award_sash': 'true',
+        'sash_badge': 'true',
+        'sash_badge_style': 'frosted',
+        'sash_badge_size_w': '1.40',
+        'sash_badge_size_h': '1.20',
+        'sash_badge_font_ratio': '0.43',
+        'sash_badge_frost_opacity': '0.75',
+        'sash_priority': 'wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,cult,foreign,new_release,metacritic,true_story,structural,release_status',
+        'badge_display_mode': '0',
+        'cinema_greyscale': 'true',
+        'release_status_cinema_only': 'true',
+    },
+    'black_rating_bar_oa': {
+        'top_gradient': 'off',
+        'bottom_gradient': 'low',
+        'fallback_to_imdb': 'true',
+        'rating_display_mode': '4',
+        'bar_style': 'rating_black',
+        'bar_accent': 'palette_0',
+        'bar_append': 'rating_year',
+        'bar_score_out_of_10': 'false',
+        'bar_height_ratio': '0.080',
+        'bar_font_size_ratio': '0.55',
+        'bar_frost_opacity': '0.85',
+        'movie_weights': 'letterboxd:0.99,trakt:0.01,tomatoes:0.00,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,rogerebert:0.00,myanimelist:0.00',
+        'tv_weights': 'trakt:0.80,tomatoes:0.20,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,myanimelist:0.00',
+        'textless': 'false',
+        'use_original_art': 'true',
+        'original_art_source': 'primary',
+        'logo_language': 'en',
+        'logo_priority': 'native_original',
+        'fallback_bg_style': 'photoreal',
+        'logo_max_w_ratio': '0.75',
+        'logo_max_h_ratio': '0.25',
+        'logo_bottom_ratio': '0.28',
+        'show_award_sash': 'true',
+        'sash_badge': 'false',
+        'muted': 'false',
+        'sash_length_ratio': '1.15',
+        'sash_height_ratio': '0.120',
+        'sash_priority': 'wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,cult,foreign,new_release,metacritic,true_story,structural,release_status',
+        'badge_display_mode': '0',
+        'cinema_greyscale': 'true',
+        'release_status_cinema_only': 'true',
+    },
+    'frosted_rating_bar_oa': {
+        'top_gradient': 'off',
+        'bottom_gradient': 'low',
+        'fallback_to_imdb': 'true',
+        'rating_display_mode': '4',
+        'bar_style': 'rating_frosted',
+        'bar_accent': 'silver',
+        'bar_append': 'sash',
+        'bar_score_out_of_10': 'false',
+        'bar_height_ratio': '0.080',
+        'bar_font_size_ratio': '0.55',
+        'bar_frost_opacity': '0.85',
+        'movie_weights': 'letterboxd:0.99,trakt:0.01,tomatoes:0.00,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,rogerebert:0.00,myanimelist:0.00',
+        'tv_weights': 'trakt:0.80,tomatoes:0.20,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,myanimelist:0.00',
+        'textless': 'false',
+        'use_original_art': 'true',
+        'original_art_source': 'primary',
+        'logo_language': 'en',
+        'logo_priority': 'native_original',
+        'fallback_bg_style': 'photoreal',
+        'logo_max_w_ratio': '0.75',
+        'logo_max_h_ratio': '0.25',
+        'logo_bottom_ratio': '0.28',
+        'show_award_sash': 'false',
+        'sash_priority': 'wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,cult,foreign,new_release,metacritic,true_story,structural,release_status',
+        'badge_display_mode': '0',
+        'cinema_greyscale': 'true',
+        'release_status_cinema_only': 'true',
+    },
+    'mini_oa': {
+        'primary_client': 'stremio_tv_nuvio',
+        'top_gradient': 'medium',
+        'bottom_gradient': 'high',
+        'fallback_to_imdb': 'true',
+        'rating_display_mode': '3',
+        'score_color_mode': '0',
+        'minimalist_append_mode': '0',
+        'minimalist_mode_font_size_ratio': '0.056',
+        'minimalist_mode_font_x_offset': '0.065',
+        'minimalist_mode_font_y_offset': '0.920',
+        'movie_weights': 'letterboxd:0.99,trakt:0.01,tomatoes:0.00,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,rogerebert:0.00,myanimelist:0.00',
+        'tv_weights': 'trakt:0.80,tomatoes:0.20,popcorn:0.00,imdb:0.00,metacritic:0.00,metacriticuser:0.00,tmdb:0.00,myanimelist:0.00',
+        'textless': 'false',
+        'use_original_art': 'true',
+        'original_art_source': 'primary',
+        'logo_language': 'en',
+        'logo_priority': 'native_original',
+        'fallback_bg_style': 'photoreal',
+        'logo_max_w_ratio': '0.75',
+        'logo_max_h_ratio': '0.25',
+        'logo_bottom_ratio': '0.28',
+        'sash_mode': 'sash',
+        'cinema_greyscale': 'true',
+        'cinema_greyscale_skip_if_available': 'false',
+        'release_status_cinema_only': 'true',
+        'muted': 'false',
+        'sash_poster_color': 'false',
+        'sash_length_ratio': '1.15',
+        'sash_height_ratio': '0.120',
+        'sash_priority': 'wins,gg_wins,festival,pic_noms,gg_noms,studio,director,cast,trending,cult,foreign,new_release,metacritic,true_story,structural,release_status',
+        'badge_display_mode': '0',
+    },
 }
 
-
-def _preset(extra: dict[str, str]) -> dict[str, str]:
-    """Layer preset-specific overrides on top of the public-tier base."""
-    return {**_PUBLIC_BASE, **extra}
-
-
-# Six starter presets. Names are part of the URL contract — renaming a
-# preset breaks any external link that already uses it, so rename only
-# with a deprecation alias.
-PRESETS: dict[str, dict[str, str]] = {
-    # Default rendering. Standard look: weighted score bar + genre/year
-    # caption + a mode-4 tier accent bar in the corner. The natural
-    # choice when no opinion about visual tone is needed.
-    "default": _preset({}),
-
-    # Sash-forward. The award/discovery sash is the only visible
-    # overlay: score hidden, no quality bar. Muted sash sits *in* the
-    # art rather than above it for a less-shouty prestige look.
-    "awards": _preset({
-        "rating_display_mode": "0",
-        "badge_display_mode":  "0",
-        "muted":               "true",
-    }),
-
-    # Minimalist mode — small genre tag bottom-right, no sash, no
-    # quality bar, no logo overlay (textless). Lets the poster art
-    # lead; cheapest preset to render of the set.
-    "minimalist": _preset({
-        "rating_display_mode": "3",
-        "badge_display_mode":  "0",
-        "show_award_sash":     "false",
-        "textless":            "true",
-    }),
-
-    # Letterboxd-flavoured: numeric score with genre tag, no sash, no
-    # quality bar. Mirrors the audience-score-only aesthetic of
-    # letterboxd embeds.
-    "letterboxd": _preset({
-        "rating_display_mode":   "2",
-        "badge_display_mode":    "0",
-        "show_award_sash":       "false",
-        "movie_weights":         "letterboxd:1.0",
-        "tv_weights":            "trakt:0.7,tomatoes:0.3",
-    }),
-
-    # Cinephile: prestige-leaning sash priority (festival circuit and
-    # director/cast slots before commercial-success ones), muted sash,
-    # and the metal score palette (grey/bronze/silver/gold) matching
-    # the tier-bar colours for a unified subdued look.
-    "cinephile": _preset({
-        "rating_display_mode": "1",
-        "badge_display_mode":  "4",
-        "sash_priority":       "wins,festival,gg_wins,director,cast,studio,pic_noms,gg_noms",
-        "muted":               "true",
-        "score_color_mode":    "2",
-    }),
-
-    # Quality-forward: keeps the score visible AND a mode-4 tier bar.
-    # Cheaper than the old badge-row mode and still signals stream
-    # availability when AIOStreams data is cached.
-    "quality": _preset({
-        "rating_display_mode": "1",
-        "badge_display_mode":  "4",
-    }),
+_PRESET_META: dict[str, dict[str, str]] = {
+    'prestige_rating_bar': {'name': 'Prestige Rating Bar', 'description': 'Classic Posters+ design featuring a score bar using the prestige score palette, which uses grey, bronze and gold. Paired with the info sash and horizontal badge row.', 'screenshot': '/static/presets/prestige_rating_bar.jpg'},
+    'light_rating_bar': {'name': 'Light Rating Bar', 'description': 'Featuring a score bar using a light score palette of red, yellow, green and purple. Info is displayed as a frosted notch at the top of the poster.', 'screenshot': '/static/presets/light_rating_bar.jpg'},
+    'clean_sash': {'name': 'Clean Sash', 'description': 'Genre and rating at the bottom in text, quality displayed as an age rating.', 'screenshot': '/static/presets/clean_sash.jpg'},
+    'clean_notch': {'name': 'Clean Notch', 'description': 'Genre and rating at the bottom in text, with a frosted notch at the top.', 'screenshot': '/static/presets/clean_notch.jpg'},
+    'mini': {'name': 'Minimalist', 'description': 'Very compact mode. The separator color conveys rating using the light palette. In the top left you can find a small notch that reflects the quality.', 'screenshot': '/static/presets/mini.jpg'},
+    'frosted_notch': {'name': 'Frosted', 'description': "Both the bar and notch will reflect the poster's color, resulting in some beautifully colorful designs. Maintains a low footprint to show off as much of the art as possible.", 'screenshot': '/static/presets/frosted_notch.jpg'},
+    'black_rating_bar_light_notch': {'name': 'Black Rating Bar', 'description': 'A black bar displaying genre, rating and year with an adaptive rating bar that uses red, yellow, green and purple.', 'screenshot': '/static/presets/black_rating_bar_light_notch.jpg'},
+    'black_rating_bar_oa': {'name': 'Black Rating Bar OA', 'description': 'Black rating bar that swaps between red, yellow, green and purple based on score. Ideal preset if you enjoy the original art, rather than textless with a logo overlay. Uses very low vignette for maximum brightness.', 'screenshot': '/static/presets/black_rating_bar_oa.jpg'},
+    'frosted_rating_bar_oa': {'name': 'Frosted Rating Bar OA', 'description': 'Frosted bar with a silver rating accent bar. Displays the genre, info sash and rating in one place while taking up the least amount of space. Uses the original art with very low vignette for maximum brightness.', 'screenshot': '/static/presets/frosted_rating_bar_oa.jpg'},
+    'mini_oa': {'name': 'Minimalist OA', 'description': 'Minimalist mode and sash allow maximum compatibility with busy original art posters. The separator color conveys the approximate rating.', 'screenshot': '/static/presets/mini_oa.jpg'},
 }
 
 
 def get_preset(name: str) -> dict[str, str] | None:
-    """Return the raw_params dict for a preset name, or None if unknown."""
-    return PRESETS.get(name)
+    """Return a COPY of the raw_params dict for a preset name, or None."""
+    p = PRESETS.get(name)
+    return dict(p) if p is not None else None
 
 
 def preset_names() -> list[str]:
-    """List of registered preset names — used by /server-caps for discovery."""
-    return sorted(PRESETS.keys())
+    """Registered preset ids — used by /server-caps for discovery."""
+    return list(PRESETS.keys())
+
+
+def preset_catalog() -> list[dict[str, str]]:
+    """Ordered [{id, name, description, screenshot}] for the locked-mode
+    configurator gallery and /server-caps. Mirrors the gallery order."""
+    return [
+        {"id": pid, **_PRESET_META[pid]}
+        for pid in PRESETS
+        if pid in _PRESET_META
+    ]

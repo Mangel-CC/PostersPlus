@@ -18,9 +18,6 @@ env/
 # Docker runtime cache volume
 postersplus-cache/
 
-# Local dev runner output (run-local.py writes SQLite, blobs, prom state here)
-.local-cache/
-
 # OS
 .DS_Store
 Thumbs.db
@@ -33,3 +30,9 @@ Thumbs.db
 
 # Claude Code local state (machine-specific permissions)
 .claude/
+
+# ElfHosted fork: local runtime artifacts (caches, prometheus multiproc, sqlite)
+.local-cache/
+postersplus-prom/
+*.db
+cache.db*

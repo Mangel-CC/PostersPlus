@@ -1,7 +1,14 @@
 #awards.py
 import os
-import re
+import math
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+try:
+    import cairo as _cairo
+    _HAS_CAIRO = True
+except ImportError:
+    _HAS_CAIRO = False
 
 
 # ---------------------------------------------------------------------------
@@ -22,30 +29,21 @@ FETCH_FAILED = _FetchFailed()
 
 
 class _RateLimited:
-    """Sentinel returned when MDBlist responds with HTTP 429.
-
-    Carries the parsed Retry-After (seconds) when the server provided one,
-    so callers can honour the upstream's stated cooldown instead of guessing.
-    Distinct from FETCH_FAILED because rate-limit handling must NOT retry
-    (would burn another quota slot) and triggers a global cooldown that
-    suspends all MDBlist traffic, not just this title's.
-
-    ``suppressed=True`` marks the case where we never actually called
-    MDBlist — the pre-call gate inside _fetch_rating_throttled saw an
-    active global cooldown and short-circuited. The caller should treat
-    these titles as "skipped by cooldown" rather than "rate-limited",
-    i.e. don't apply a long per-title back-off (the title itself was
-    fine, it was just collateral damage from a peer's 429).
     """
-    __slots__ = ("retry_after", "suppressed")
-    def __init__(self, retry_after: float | None = None, suppressed: bool = False):
+    Returned when a fetch was rejected with HTTP 429.
+
+    Carries the parsed Retry-After value (in seconds) when the upstream
+    provided one, so the caller can honour it instead of the default fixed
+    back-off. Always distinct from FETCH_FAILED so the standard retry path
+    skips immediate re-attempts (retrying a 429 is counterproductive).
+    """
+    __slots__ = ("retry_after",)
+
+    def __init__(self, retry_after: float | None = None):
         self.retry_after = retry_after
-        self.suppressed = suppressed
-    def __repr__(self) -> str:
-        return (
-            f"_RateLimited(retry_after={self.retry_after!r}, "
-            f"suppressed={self.suppressed!r})"
-        )
+
+    def __repr__(self):
+        return f"RATE_LIMITED(retry_after={self.retry_after})"
 
 
 # ---------------------------------------------------------------------------
@@ -1213,7 +1211,7 @@ def parse_mdblist_awards(
 
 
 # ---------------------------------------------------------------------------
-# Sash drawing  (unchanged from original)
+# Sash drawing
 # ---------------------------------------------------------------------------
 
 def _text_center(
@@ -1238,24 +1236,467 @@ def _text_center(
     return x, y
 
 
+def _sash_body_cairo(
+    sl: int,
+    sh: int,
+    hi: tuple[int, int, int, int],
+    lo: tuple[int, int, int, int],
+    border_colour: tuple[int, int, int, int],
+    margin: int,
+    edge: int,
+) -> "Image.Image | None":
+    """
+    Cairo-rasterised sash body used only when muted=True.
+
+    The muted path scales the final sash's alpha by 0.8, which amplifies
+    differences in edge softness — cairo's properly antialiased fills
+    survive the rotation + downsample with cleaner edges than PIL's
+    per-row line draw, so the muted look is visibly nicer.
+
+    Default (un-muted) renders use the PIL path because the visual
+    difference is sub-perceptual there and PIL is ~4x faster on this body.
+    Returns None if pycairo is unavailable so the caller can fall back.
+    """
+    if not _HAS_CAIRO:
+        return None
+
+    surface = _cairo.ImageSurface(_cairo.FORMAT_ARGB32, sl, sh)
+    ctx     = _cairo.Context(surface)
+    ctx.set_antialias(_cairo.ANTIALIAS_BEST)
+
+    grad = _cairo.LinearGradient(0, 0, 0, sh)
+    grad.add_color_stop_rgba(0.0, lo[0] / 255, lo[1] / 255, lo[2] / 255, lo[3] / 255)
+    grad.add_color_stop_rgba(0.5, hi[0] / 255, hi[1] / 255, hi[2] / 255, hi[3] / 255)
+    grad.add_color_stop_rgba(1.0, lo[0] / 255, lo[1] / 255, lo[2] / 255, lo[3] / 255)
+    ctx.set_source(grad)
+    ctx.rectangle(0, 0, sl, sh)
+    ctx.fill()
+
+    ctx.set_source_rgba(8 / 255, 8 / 255, 14 / 255, 245 / 255)
+    ctx.rectangle(0, margin, sl, sh - 2 * margin)
+    ctx.fill()
+
+    br, bg, bb, ba = border_colour
+    ctx.set_source_rgba(br / 255, bg / 255, bb / 255, ba / 255)
+    ctx.rectangle(0, 0, sl, edge)
+    ctx.fill()
+    ctx.rectangle(0, sh - edge, sl, edge)
+    ctx.fill()
+
+    surface.flush()
+
+    # ARGB32 → RGBA. Body is always fully opaque, so a plain channel swap is
+    # sufficient (no un-premultiplication needed). Stride may exceed sl*4 for
+    # SIMD alignment so we crop before reshaping.
+    stride = surface.get_stride()
+    buf    = bytes(surface.get_data())
+    arr    = np.frombuffer(buf, dtype=np.uint8).reshape((sh, stride))[:, : sl * 4]
+    arr    = arr.reshape((sh, sl, 4))
+    rgba   = arr[:, :, [2, 1, 0, 3]].copy()
+    return Image.fromarray(rgba, "RGBA")
+
+
+# Awards whose winner and nominee share the same label text (see
+# parse_mdblist_awards), so the notch badge — which can't use colour for win/nom
+# because notch_style owns the trim colour — prefixes a ★ to mark the winner,
+# mirroring the star convention in score/compact modes.  Emmy is excluded (its
+# labels already say "Winner"/"Nominee"); festival winners are intentionally
+# left unmarked.  Strings must match the labels emitted by parse_mdblist_awards.
+_STAR_WIN_AWARDS = {"Best Picture", "Golden Globe"}
+
+
+def sample_frosted_notch_rgb(
+    image: Image.Image,
+    label: str,
+    sash_type: str = "win",
+    size_ratio_w: float = 1.0,
+    size_ratio_h: float = 1.0,
+    font_size_ratio: float = 0.43,
+    notch_inset: float = 0.004,
+    star: bool | None = None,
+) -> tuple[float, float, float]:
+    """Dominant RGB the frosted notch would sample from its crop region.
+
+    Replicates draw_award_badge's geometry + sampling so the colour-matching
+    logic upstream can compare it against the frosted bar.  Keep the constants
+    here in sync with draw_award_badge.  `star` overrides the ★ decision when
+    the caller already resolved it on the canonical (pre-translation) label.
+    """
+    width, height = image.size
+    SS = 3
+    if star if star is not None else (sash_type == "win" and label in _STAR_WIN_AWARDS):
+        label = f"★  {label}"
+
+    badge_h = int(height * 0.075 * size_ratio_h)
+    _fonts_dir   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+    font_size_ss = int(badge_h * font_size_ratio) * SS
+    try:
+        font = ImageFont.truetype(os.path.join(_fonts_dir, "Inter-Bold.ttf"), font_size_ss)
+    except IOError:
+        font = ImageFont.load_default()
+
+    _tmp_d    = ImageDraw.Draw(Image.new("L", (1, 1)))
+    _tbbox    = _tmp_d.textbbox((0, 0), label, font=font)
+    text_w_ss = _tbbox[2] - _tbbox[0]
+
+    _h_pad      = int(badge_h * 0.70)
+    min_badge_w = int(width * 0.28 * size_ratio_w)
+    max_badge_w = int(width * 0.70)
+    badge_w     = max(min_badge_w, min(max_badge_w, text_w_ss // SS + _h_pad))
+
+    bx = (width - badge_w) // 2
+    by_composite = max(-badge_h, int(height * notch_inset))
+    crop_y = max(0, by_composite)
+    region = image.crop((bx, crop_y, bx + badge_w, crop_y + badge_h))
+    blurred = region.filter(ImageFilter.GaussianBlur(radius=max(4, int(badge_h * 0.35))))
+    thumb = blurred.resize((8, 8), Image.LANCZOS).convert("RGB")
+    arr = np.array(thumb, dtype=np.float32)
+    return float(arr[:, :, 0].mean()), float(arr[:, :, 1].mean()), float(arr[:, :, 2].mean())
+
+
+def draw_award_badge(
+    image: Image.Image,
+    label: str,
+    sash_type: str = "win",        # kept for colour wiring — may be used by future styles
+    size_ratio_w: float = 1.0,     # horizontal scale multiplier
+    size_ratio_h: float = 1.0,     # vertical scale multiplier
+    notch_style: str = "frosted",     # "silver" | "gold" | "frosted"
+    notch_inset: float = 0.004,        # top-edge offset as fraction of poster height (± small)
+    font_size_ratio: float = 0.43,    # font size as fraction of badge height
+    frost_opacity: float = 0.75,      # frosted overlay opacity (0.0–1.0)
+    tint_rgb: tuple[float, float, float] | None = None,  # override sampled colour (frosted)
+    star: bool | None = None,         # override ★ decision (resolved on canonical label)
+) -> Image.Image:
+    """
+    Centred notch badge that emerges from the top edge of the poster.
+    Always horizontally centred; notch_inset nudges it up/down so users
+    can control whether the top border is hidden or visible in their client.
+
+    Three styles:
+      silver  — dark gradient body with silver trim, white text
+      gold    — dark gradient body with gold trim, white text
+      frosted — highly opaque blurred poster pixels, dark text
+
+    sash_type colour wiring is retained for future use.
+    Uses Cairo (sub-pixel AA, gradient) with PIL fallback. 3× LANCZOS downscale.
+    """
+    width, height = image.size
+
+    SS = 3  # render at 3× then LANCZOS-downscale for crisp text and edges
+
+    # ── Colour wiring (kept for potential future use by styles) ───────────────
+    if sash_type == "win":
+        border_rgb = (212, 175, 55)
+    elif sash_type == "prestige":
+        border_rgb = (190, 140, 255)
+    elif sash_type == "cast":
+        border_rgb = (102, 187, 106)
+    elif sash_type == "info":
+        border_rgb = (100, 220, 210)
+    elif sash_type == "alert":
+        border_rgb = (240, 100, 100)
+    elif sash_type == "trending":
+        border_rgb = (160, 220, 255)
+    else:  # "nom"
+        border_rgb = (192, 192, 200)
+
+    # Style-specific trim colours (override sash colour for silver/gold)
+    _SILVER = (192, 192, 200)
+    _GOLD   = (212, 175, 55)
+    trim_rgb = _SILVER if notch_style == "silver" else (_GOLD if notch_style == "gold" else border_rgb)
+
+    # Winner marker: for awards whose win/nom labels are identical (Best Picture,
+    # Golden Globe) the trim colour can't disambiguate them in notch mode (the
+    # user's notch_style fixes it), so prefix a ★ for the winner — consistent
+    # with the star in score/compact modes.  The badge width auto-expands to fit.
+    # Double space after the star so it sits clearly left of the text rather than
+    # crowding the first letter.  `star` (when provided) is resolved upstream on
+    # the canonical English label so translated labels still get their marker.
+    if star if star is not None else (sash_type == "win" and label in _STAR_WIN_AWARDS):
+        label = f"★  {label}"
+
+    # ── Dimensions ───────────────────────────────────────────────────────────
+    badge_h = int(height * 0.075 * size_ratio_h)
+    bh      = badge_h * SS  # SS-space height (independent of width)
+
+    # ── Font: fixed size so every label renders at the same scale ────────────
+    _fonts_dir   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+    font_size_ss = int(badge_h * font_size_ratio) * SS
+    try:
+        font = ImageFont.truetype(os.path.join(_fonts_dir, "Inter-Bold.ttf"), font_size_ss)
+    except IOError:
+        font = ImageFont.load_default()
+
+    # Measure rendered text width at SS resolution
+    _tmp_d  = ImageDraw.Draw(Image.new("L", (1, 1)))
+    _tbbox  = _tmp_d.textbbox((0, 0), label, font=font)
+    text_w_ss = _tbbox[2] - _tbbox[0]
+
+    # Badge width: minimum is size_ratio_w-scaled default; expands to fit text
+    # with horizontal padding of ~45% of badge_h (22.5% each side).
+    _h_pad    = int(badge_h * 0.70)
+    min_badge_w = int(width * 0.28 * size_ratio_w)
+    max_badge_w = int(width * 0.70)
+    badge_w   = max(min_badge_w, min(max_badge_w, text_w_ss // SS + _h_pad))
+
+    radius   = int(badge_h * 0.32)
+    border_w = max(1, int(badge_h * 0.055))
+    bw    = badge_w * SS
+    r_ss  = radius   * SS
+    bw_ss = border_w * SS
+
+    # ── Position: always centred horizontally, inset controls top-edge offset ─
+    bx = (width - badge_w) // 2
+    by_composite = max(-badge_h, int(height * notch_inset))
+
+    # Text is geometrically centred; client-specific placement is handled by inset.
+    text_cy_ss = bh / 2
+
+    if notch_style == "frosted":
+        # ── Frosted: blurred poster crop tinted toward the region's dominant colour ──
+        # Crop from the actual composite position so the blur matches what's visible
+        crop_y = max(0, by_composite)
+        region = image.crop((bx, crop_y, bx + badge_w, crop_y + badge_h))
+        blur_r = max(4, int(badge_h * 0.35))
+        blurred = region.filter(ImageFilter.GaussianBlur(radius=blur_r))
+        blurred_ss = blurred.resize((bw, bh), Image.LANCZOS).convert("RGBA")
+
+        # Sample dominant colour from the (lightly blurred) region — use a small
+        # thumbnail so the mean is fast and noise-free.  tint_rgb (when supplied)
+        # overrides the colour so the notch can match the frosted rating bar.
+        if tint_rgb is not None:
+            dr, dg, db = tint_rgb
+        else:
+            thumb = blurred.resize((8, 8), Image.LANCZOS).convert("RGB")
+            arr_thumb = np.array(thumb, dtype=np.float32)
+            dr, dg, db = arr_thumb[:, :, 0].mean(), arr_thumb[:, :, 1].mean(), arr_thumb[:, :, 2].mean()
+
+        # Boost toward a bright, saturated version of that colour so the tint
+        # reads clearly: push V toward 1.0 while keeping H+S, then mix 60 % of
+        # that tint with 40 % white so very dark posters still look "frosted".
+        import colorsys as _cs
+        _h, _s, _v = _cs.rgb_to_hsv(dr / 255, dg / 255, db / 255)
+        _v_boost = _v * 0.4 + 0.60          # floor V at 60% so dark regions lift
+        _s_boost = min(1.0, _s * 1.2)       # slightly push saturation
+        tr, tg, tb = _cs.hsv_to_rgb(_h, _s_boost, _v_boost)
+        # Mix tinted colour with white (60/40) for the frosted feel
+        fr_r = int(tr * 255 * 0.6 + 255 * 0.4)
+        fr_g = int(tg * 255 * 0.6 + 255 * 0.4)
+        fr_b = int(tb * 255 * 0.6 + 255 * 0.4)
+
+        # Notch shape mask (square top, rounded bottom)
+        rr_mask_ss = Image.new("L", (bw, bh), 0)
+        ImageDraw.Draw(rr_mask_ss).rounded_rectangle(
+            [(0, 0), (bw - 1, bh - 1)], radius=r_ss, fill=255,
+            corners=(False, False, True, True)
+        )
+        rr_f = np.array(rr_mask_ss, dtype=np.float32) / 255
+
+        # Lay blurred crop under the tinted frost layer (alpha ~210 = quite opaque)
+        blurred_ss.putalpha(rr_mask_ss)
+        frost = Image.new("RGBA", (bw, bh), (fr_r, fr_g, fr_b, 0))
+        frost.putalpha(Image.fromarray((rr_f * frost_opacity * 255).astype(np.uint8), "L"))
+        badge_ss = Image.alpha_composite(blurred_ss, frost)
+
+        # Dark text
+        txt_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+        td = ImageDraw.Draw(txt_layer)
+        tx, ty = _text_center(td, label, font, bw / 2, text_cy_ss)
+        td.text((tx, ty), label, font=font, fill=(0, 0, 0, 245))
+        badge_ss = Image.alpha_composite(badge_ss, txt_layer)
+
+        badge_final = badge_ss.resize((badge_w, badge_h), Image.LANCZOS)
+        result = image.copy()
+        result.alpha_composite(badge_final, (bx, by_composite))
+        return result
+
+    if notch_style == "black":
+        # ── Pure black: dark near-opaque body, no border, silver/white text ──
+        badge_ss = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+        rr_mask_ss = Image.new("L", (bw, bh), 0)
+        ImageDraw.Draw(rr_mask_ss).rounded_rectangle(
+            [(0, 0), (bw - 1, bh - 1)], radius=r_ss, fill=255,
+            corners=(False, False, True, True)
+        )
+        body = Image.new("RGBA", (bw, bh), (10, 10, 12, 230))
+        body.putalpha(rr_mask_ss)
+        badge_ss = body
+        txt_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+        td = ImageDraw.Draw(txt_layer)
+        tx, ty = _text_center(td, label, font, bw / 2, text_cy_ss)
+        td.text((tx, ty), label, font=font, fill=(210, 210, 218, 245))
+        badge_ss = Image.alpha_composite(badge_ss, txt_layer)
+        badge_final = badge_ss.resize((badge_w, badge_h), Image.LANCZOS)
+        result = image.copy()
+        result.alpha_composite(badge_final, (bx, by_composite))
+        return result
+
+    body_alpha   = 235
+    border_alpha = 215
+
+    # ── Badge body + border (dark gradient, silver or gold trim) ─────────────
+    # Always notch shape: square top corners, rounded bottom corners.
+    # Cairo path for sub-pixel AA and gradient fill; PIL fallback otherwise.
+    badge: Image.Image | None = None
+
+    if _HAS_CAIRO:
+        try:
+            surface = _cairo.ImageSurface(_cairo.FORMAT_ARGB32, bw, bh)
+            ctx     = _cairo.Context(surface)
+            ctx.set_antialias(_cairo.ANTIALIAS_BEST)
+
+            def _rrect_notch(x: float, y: float, w: float, h: float, r: float) -> None:
+                """Notch shape: square top corners, rounded bottom corners only."""
+                ctx.move_to(x, y)
+                ctx.line_to(x + w, y)
+                ctx.line_to(x + w, y + h - r)
+                ctx.arc(x + w - r, y + h - r, r,  0,           math.pi / 2)
+                ctx.line_to(x + r, y + h)
+                ctx.arc(x + r,     y + h - r, r,  math.pi / 2, math.pi)
+                ctx.line_to(x, y)
+                ctx.close_path()
+
+            ba    = body_alpha / 255
+            inset = bw_ss / 2
+
+            # Dark gradient body (8 → 24 → 8 brightness, slight blue tint)
+            d_lo = 4  / 255
+            d_hi = 14 / 255
+            grad = _cairo.LinearGradient(0, 0, 0, bh)
+            grad.add_color_stop_rgba(0.0, d_lo, d_lo, d_lo * 1.3, ba)
+            grad.add_color_stop_rgba(0.5, d_hi, d_hi, d_hi * 1.3, ba)
+            grad.add_color_stop_rgba(1.0, d_lo, d_lo, d_lo * 1.3, ba)
+            ctx.set_source(grad)
+            _rrect_notch(0, 0, bw, bh, r_ss)
+            ctx.fill()
+            # Open-top trim: sides continue from the poster edge and wrap
+            # around the rounded bottom, but no horizontal line can peek out
+            # when a client crops or rounds the poster top.
+            tr_c, tg_c, tb_c = trim_rgb
+            ctx.set_source_rgba(tr_c / 255, tg_c / 255, tb_c / 255, border_alpha / 255)
+            ctx.set_line_width(bw_ss)
+            trim_r = max(1.0, r_ss - inset)
+            ctx.move_to(inset, 0)
+            ctx.line_to(inset, bh - inset - trim_r)
+            ctx.arc_negative(inset + trim_r, bh - inset - trim_r, trim_r, math.pi, math.pi / 2)
+            ctx.line_to(bw - inset - trim_r, bh - inset)
+            ctx.arc_negative(bw - inset - trim_r, bh - inset - trim_r, trim_r, math.pi / 2, 0)
+            ctx.line_to(bw - inset, 0)
+            ctx.stroke()
+
+            surface.flush()
+            stride = surface.get_stride()
+            buf    = bytes(surface.get_data())
+            arr = (
+                np.frombuffer(buf, dtype=np.uint8)
+                .reshape((bh, stride))[:, : bw * 4]
+                .reshape((bh, bw, 4))
+                .copy()
+            )
+            # Cairo ARGB32 is premultiplied; un-premultiply to get straight RGBA.
+            # Memory order per pixel: [B, G, R, A] (little-endian 32-bit word).
+            a_f    = arr[:, :, 3].astype(np.float32)
+            safe_a = np.where(a_f > 0, a_f, 1.0)
+            r_s = np.clip(arr[:, :, 2].astype(np.float32) * 255.0 / safe_a, 0, 255).astype(np.uint8)
+            g_s = np.clip(arr[:, :, 1].astype(np.float32) * 255.0 / safe_a, 0, 255).astype(np.uint8)
+            b_s = np.clip(arr[:, :, 0].astype(np.float32) * 255.0 / safe_a, 0, 255).astype(np.uint8)
+            rgba  = np.stack([r_s, g_s, b_s, arr[:, :, 3]], axis=2)
+            badge = Image.fromarray(rgba, "RGBA")
+        except Exception:
+            badge = None
+
+    if badge is None:
+        # ── PIL fallback (always notch shape) ─────────────────────────────────
+        t     = np.linspace(0, 1, bh, dtype=np.float32)
+        b_arr = np.zeros((bh, bw, 4), dtype=np.uint8)
+        darkness = (4 + 10 * np.sin(t * np.pi)).astype(np.uint8)
+        b_arr[:, :, 0] = darkness[:, np.newaxis]
+        b_arr[:, :, 1] = darkness[:, np.newaxis]
+        b_arr[:, :, 2] = np.minimum(255, (darkness * 1.3).astype(np.uint8))[:, np.newaxis]
+        b_arr[:, :, 3] = body_alpha
+        body = Image.fromarray(b_arr, "RGBA")
+
+        _nc = dict(corners=(False, False, True, True))
+        body_mask = Image.new("L", (bw, bh), 0)
+        ImageDraw.Draw(body_mask).rounded_rectangle(
+            [(0, 0), (bw - 1, bh - 1)], radius=r_ss, fill=255, **_nc
+        )
+        body.putalpha(body_mask)
+        border_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+        border_draw = ImageDraw.Draw(border_layer)
+        border_draw.rounded_rectangle(
+            [(0, 0), (bw - 1, bh - 1)],
+            radius=r_ss, outline=(*trim_rgb, border_alpha), width=bw_ss, **_nc,
+        )
+        # Remove only the horizontal top stroke, retaining both vertical sides.
+        border_draw.rectangle(
+            [(bw_ss, 0), (bw - bw_ss - 1, bw_ss)], fill=(0, 0, 0, 0)
+        )
+        badge = Image.alpha_composite(body, border_layer)
+
+    # ── Text: white on dark body, with drop shadow ───────────────────────────
+    txt_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+    td = ImageDraw.Draw(txt_layer)
+    tx, ty = _text_center(td, label, font, bw / 2, text_cy_ss)
+    td.text((tx + SS, ty + SS), label, font=font, fill=(0, 0, 0, 160))
+    td.text((tx, ty),           label, font=font, fill=(255, 255, 255, 235))
+    badge = Image.alpha_composite(badge, txt_layer)
+
+    # ── Downscale → composite ────────────────────────────────────────────────
+    badge = badge.resize((badge_w, badge_h), Image.Resampling.LANCZOS)
+    result = image.copy()
+    result.alpha_composite(badge, (bx, by_composite))
+    return result
+
+
+def _frosted_tint(dr: float, dg: float, db: float) -> tuple[int, int, int]:
+    """Poster dominant RGB → the same boosted/whitened tint the frosted notch
+    uses, so the sash / notch / bar all derive a consistent colour."""
+    import colorsys
+    h, s, v = colorsys.rgb_to_hsv(dr / 255, dg / 255, db / 255)
+    tr, tg, tb = colorsys.hsv_to_rgb(h, min(1.0, s * 1.2), v * 0.4 + 0.60)
+    return (int(tr*255*0.6 + 255*0.4), int(tg*255*0.6 + 255*0.4), int(tb*255*0.6 + 255*0.4))
+
+
+def sample_frosted_sash_rgb(image: Image.Image) -> tuple[float, float, float]:
+    """Dominant RGB of the top-right corner region the diagonal sash overlays."""
+    width, height = image.size
+    reg = image.crop((int(width * 0.55), 0, width, int(height * 0.22)))
+    blr = reg.filter(ImageFilter.GaussianBlur(radius=max(6, int(height * 0.02))))
+    th  = blr.resize((8, 8), Image.LANCZOS).convert("RGB")
+    ar  = np.array(th, dtype=np.float32)
+    return float(ar[:, :, 0].mean()), float(ar[:, :, 1].mean()), float(ar[:, :, 2].mean())
+
+
 def draw_award_sash(
     image: Image.Image,
     label: str,
     sash_type: str = "win",
     muted: bool = False,
+    length_ratio: float = 1.15,
+    height_ratio: float = 0.12,
+    poster_color: tuple[float, float, float] | None = None,
 ) -> Image.Image:
     width, height = image.size
 
+    # SS = supersample factor. 2× supersample + LANCZOS downsample gives edges
+    # and text that are visually indistinguishable from 3× after JPEG, but cuts
+    # the rotation + downsample cost roughly in half (the dominant phases of the
+    # whole sash pipeline). Drop to 1 only if you can also drop the rotation.
     SS          = 3
-    sash_length = int(width * 1.15) #1.1
-    sash_height = int(width * 0.12) #0.12
+    sash_length = int(width * length_ratio)
+    sash_height = int(width * height_ratio)
 
     sl, sh = sash_length * SS, sash_height * SS
 
-    sash = Image.new("RGBA", (sl, sh), (0, 0, 0, 0))
-    d    = ImageDraw.Draw(sash)
-
-    if sash_type == "win":
+    if poster_color is not None:
+        # Poster-derived colour: tint the band edges / border from the art (same
+        # logic the frosted notch uses).  The dark centre + light text are kept.
+        _t = _frosted_tint(*poster_color)
+        hi            = (*_t, 255)
+        lo            = tuple(max(0, int(c * 0.6)) for c in _t) + (255,)
+        border_colour = (*_t, 255)
+    elif sash_type == "win":
         hi, lo        = (212, 175, 55, 255), (160, 130, 40, 255)
         border_colour = (212, 175, 55, 255)
     elif sash_type == "prestige":
@@ -1267,6 +1708,9 @@ def draw_award_sash(
     elif sash_type == "info":
         hi, lo        = (60, 190, 180, 255), (30, 130, 120, 255)
         border_colour = (100, 220, 210, 255)
+    elif sash_type == "alert":
+        hi, lo        = (200, 55, 55, 255), (145, 25, 25, 255)
+        border_colour = (240, 100, 100, 255)
     elif sash_type == "trending":
         hi, lo        = (90, 170, 255, 255), (50, 110, 190, 255)
         border_colour = (160, 220, 255, 255)
@@ -1274,26 +1718,30 @@ def draw_award_sash(
         hi, lo        = (180, 180, 190, 255), (110, 110, 120, 255)
         border_colour = (192, 192, 200, 255)
 
-    half = sh // 2
-    for y in range(sh):
-        t = y / half if y < half else (sh - y) / half
-        colour = tuple(int(lo[i] * (1 - t) + hi[i] * t) for i in range(4))
-        d.line([(0, y), (sl, y)], fill=colour)
-
     margin = int(sh * 0.12)
-    d.rectangle([(0, margin), (sl, sh - margin)], fill=(8, 8, 8, 245))
+    edge   = max(2 * SS, sh // 18)
 
-    edge = max(2 * SS, sh // 18)
-    d.rectangle([(0, 0), (sl, edge)], fill=border_colour)
-    d.rectangle([(0, sh - edge), (sl, sh)], fill=border_colour)
-    # Disabled because it's causing aliasing bugs // d.rectangle([(0, 0), (sl - 1, sh - 1)], outline=(0, 0, 0, 120), width=max(1, SS))
+    # Body rendering: cairo when muted (smoother edges survive the 0.8 alpha
+    # scale visibly), PIL otherwise (sub-perceptual difference + ~4x faster).
+    sash = _sash_body_cairo(sl, sh, hi, lo, border_colour, margin, edge) if muted else None
+    if sash is None:
+        sash = Image.new("RGBA", (sl, sh), (0, 0, 0, 0))
+        d    = ImageDraw.Draw(sash)
+        half = sh // 2
+        for y in range(sh):
+            t = y / half if y < half else (sh - y) / half
+            colour = tuple(int(lo[i] * (1 - t) + hi[i] * t) for i in range(4))
+            d.line([(0, y), (sl, y)], fill=colour)
+        d.rectangle([(0, margin), (sl, sh - margin)], fill=(8, 8, 8, 245))
+        d.rectangle([(0, 0), (sl, edge)], fill=border_colour)
+        d.rectangle([(0, sh - edge), (sl, sh)], fill=border_colour)
 
     base_size     = sash_height * 0.4
     adjusted_size = sash_height * 0.85 / (len(label) ** 0.35)
     font_size     = int(min(base_size, adjusted_size)) * SS
 
     try:
-        font = ImageFont.truetype(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Ubuntu-Bold.ttf"), font_size)
+        font = ImageFont.truetype(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Inter-Bold.ttf"), font_size)
     except IOError:
         font = ImageFont.load_default()
 
@@ -1313,7 +1761,7 @@ def draw_award_sash(
     sash = sash.resize((sash.width // SS, sash.height // SS), Image.Resampling.LANCZOS)
 
     if muted:
-        # Scale alpha to ~85% — sits level with the art rather than above it,
+        # Scale alpha to ~80% — sits level with the art rather than above it,
         # without making the text hard to read.
         r, g, b, a = sash.split()
         a = a.point(lambda v: int(v * 0.8))

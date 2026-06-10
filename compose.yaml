@@ -3,32 +3,33 @@ services:
     build:
       context: .
       dockerfile: ./dockerfile
-    # Modern Docker requires lowercase image names. (Upstream uses
-    # "PostersPlus"; we keep the build but rename the local tag.)
-    image: postersplus
+      args:
+        # Bake the PP-OCRv5 Mobile detector into the image (default). Set
+        # BAKE_PPOCR_MODEL=false in your .env for a lean image that downloads the
+        # model once at runtime instead.
+        BAKE_PPOCR_MODEL: "${BAKE_PPOCR_MODEL:-true}"
+    image: PostersPlus
     ports:
       - "8000:8000"
     restart: unless-stopped
-    # Phase 9 hardening: drop all Linux capabilities the app doesn't need,
-    # disallow privilege escalation, run with a read-only root filesystem
-    # backed by a tmpfs for the prometheus multiproc dir + /tmp.
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64M
-      - /tmp/postersplus-prom:rw,noexec,nosuid,size=16M
     volumes:
-      - ./postersplus-cache:/app/cache  # cache DB, TMDB posters/logos, discovery_overrides.json
+      # Named volume (not a host bind) so a fresh `compose up` works with the
+      # non-root uid 568 the image runs as: Docker seeds a new named volume's
+      # ownership from the image's /app/cache (owned by 568), whereas a fresh
+      # host bind dir is created root-owned and would be unwritable. Holds the
+      # cache DB, TMDB posters/logos, and composites.
+      # To supply discovery_overrides.json, copy it in after first start:
+      #   docker compose cp ./discovery_overrides.json postersplus:/app/cache/
+      - postersplus-cache:/app/cache
     env_file:
       - .env # see this file for an explanation of what each flag does
     environment: 
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - MDBLIST_API_KEY=${MDBLIST_API_KEY:-}
       - ACCESS_KEY=${ACCESS_KEY:-}
-      - WORKERS=${WORKERS:-2}
+      - WORKERS=${WORKERS:-1}
+      - TEXTLESS_DETECTION_CONCURRENCY=${TEXTLESS_DETECTION_CONCURRENCY:-2}
+      - TEXTLESS_DETECTION_MAX_VOTES=${TEXTLESS_DETECTION_MAX_VOTES:-3000}
       - AIOSTREAMS_URL=${AIOSTREAMS_URL:-}
       - AIOSTREAMS_AUTH=${AIOSTREAMS_AUTH:-}
       - QUALITY_OLD_CACHE_DURATION=${QUALITY_OLD_CACHE_DURATION:-90}
@@ -37,86 +38,31 @@ services:
       - COMPOSITE_CACHE_TTL=${COMPOSITE_CACHE_TTL:-604800}
       - COMPOSITE_MAX_ENTRIES=${COMPOSITE_MAX_ENTRIES:-0}
       - DEFAULT_LOGO_LANGUAGE=${DEFAULT_LOGO_LANGUAGE:-en}
-      # ElfHosted fork — hosted-mode backend selection.
-      # Leave DATABASE_URL unset to use SQLite (default). Set it to a
-      # postgresql:// URL to opt into the Postgres backend. The optional
-      # "hosted" profile below provisions a local Postgres for development.
+      # --- ElfHosted fork: hosted-mode backends (all opt-in; unset = upstream) ---
+      # Postgres / Redis / S3 backends. Leave unset for SQLite + in-process +
+      # local FS. See .env / .env.example for the commented postgres/redis/minio
+      # sidecar recipes and full descriptions.
       - DATABASE_URL=${DATABASE_URL:-}
-      - DB_POOL_MIN_SIZE=${DB_POOL_MIN_SIZE:-1}
-      - DB_POOL_MAX_SIZE=${DB_POOL_MAX_SIZE:-10}
-      # Phase 2: Redis coordination (opt-in). Leave REDIS_URL unset for the
-      # in-process default. The hosted profile provisions a local Redis.
       - REDIS_URL=${REDIS_URL:-}
-      - REDIS_KEY_PREFIX=${REDIS_KEY_PREFIX:-postersplus}
-      # Phase 3: object-store backend for TMDB poster/logo bytes (opt-in).
-      # Leave OBJECT_STORE_URL unset to keep upstream's local filesystem path.
       - OBJECT_STORE_URL=${OBJECT_STORE_URL:-}
       - OBJECT_STORE_PUBLIC_URL=${OBJECT_STORE_PUBLIC_URL:-}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
-      # Phase 4: render concurrency cap + queue timeout.
+      # Static-preset moat + observability + limits.
+      - PRESET_ENABLED=${PRESET_ENABLED:-}
+      - PRESET_CDN_CACHE_TTL=${PRESET_CDN_CACHE_TTL:-86400}
+      - ANONYMOUS_TMDB_RPS=${ANONYMOUS_TMDB_RPS:-5}
+      - RATE_LIMIT_RPS=${RATE_LIMIT_RPS:-0}
       - RENDER_CONCURRENCY=${RENDER_CONCURRENCY:-0}
       - RENDER_QUEUE_TIMEOUT=${RENDER_QUEUE_TIMEOUT:-30}
-      # Phase 6: observability.
       - METRICS_ACCESS_KEY=${METRICS_ACCESS_KEY:-}
       - LOG_FORMAT=${LOG_FORMAT:-text}
-      # Phase 8: per-tenant rate limit on /poster. 0 = unlimited.
-      - RATE_LIMIT_RPS=${RATE_LIMIT_RPS:-0}
+    # The image runs as the non-root uid 568; the named volume below is seeded
+    # writable for it automatically (see the volumes: note).
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/live')"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
 
-  # Optional Postgres for hosted-mode dev. Activate with:
-  #   docker compose --profile hosted up -d
-  # then set DATABASE_URL=postgresql://postersplus:postersplus@postgres:5432/postersplus
-  postgres:
-    profiles: ["hosted"]
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: postersplus
-      POSTGRES_PASSWORD: postersplus
-      POSTGRES_DB: postersplus
-    volumes:
-      - ./postersplus-postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postersplus -d postersplus"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Optional Redis for hosted-mode coordination (Phase 2). Activate with the
-  # `hosted` profile (same as the postgres service above) and set
-  # REDIS_URL=redis://redis:6379/0
-  redis:
-    profiles: ["hosted"]
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  # Optional MinIO for hosted-mode blob storage (Phase 3). Provides an
-  # S3-compatible endpoint for dev. In production point OBJECT_STORE_URL at
-  # a real S3 (AWS / Backblaze B2 / Cloudflare R2 / etc.).
-  minio:
-    profiles: ["hosted"]
-    image: minio/minio:latest
-    restart: unless-stopped
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: postersplus
-      MINIO_ROOT_PASSWORD: postersplus
-    volumes:
-      - ./postersplus-minio:/data
-    healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+volumes:
+  postersplus-cache:

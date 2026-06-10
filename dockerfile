@@ -1,66 +1,79 @@
-## ElfHosted fork — Phase 9 hardened multi-stage build.
-##
-## Builder stage installs wheels (build-essential needed for any source-only
-## packages) and the final stage is a lean python:3.11-slim with only the
-## site-packages and app sources.
-##
-## Runs as appuser from the start — no gosu / root-startup dance. On
-## Kubernetes the deployment's SecurityContext (runAsNonRoot, runAsUser,
-## fsGroup) handles per-container user policy and volume permissions, so
-## the container doesn't need to drop privileges at runtime. For docker
-## compose users on a fresh host volume: chown the host directory before
-## the first `up`, or set the volume's uid/gid in compose.yaml.
-
+# ── Builder stage ─────────────────────────────────────────────────────────────
+# Compiles pycairo (and any future C-extension wheels) against the cairo dev
+# headers, then we copy only the resulting wheels into the runtime image so the
+# ~200MB of build toolchain doesn't ship to users.
 FROM python:3.11-slim AS builder
-
 WORKDIR /build
 
-# build-essential is only needed for any wheels that fall back to source.
-# Pillow, numpy, httpx, psycopg[binary], redis, boto3, prometheus-client,
-# python-json-logger all ship binary wheels for linux/amd64+arm64; keeping
-# build-essential covers any minor wheel gaps without enlarging the runtime.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
+    build-essential \
+    libcairo2-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip wheel --wheel-dir /wheels --no-cache-dir -r requirements.txt
+RUN find /wheels -type f -name 'opencv_python-*.whl' -delete
 
-
-## Final runtime image.
-
+# ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM python:3.11-slim
-
 WORKDIR /app
 
-# curl for the compose healthcheck; ca-certificates for TLS to TMDB / MDBList / S3.
-# No compiler toolchain in the runtime image.
+# libcairo2 (runtime only — no -dev headers needed) for pycairo/cairosvg.
+# ElfHosted fork: no gosu — the container runs as a fixed non-root uid (see
+# below); on Kubernetes the deployment SecurityContext (runAsNonRoot/fsGroup)
+# owns user + volume-permission policy, so there's no root-startup drop dance.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl \
-        ca-certificates \
+    libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy site-packages from the builder. /install is a `--prefix=`-style
-# layout: bin/ lib/python3.11/site-packages/ etc.
-COPY --from=builder /install /usr/local
+COPY --from=builder /wheels /wheels
+# RapidOCR's GUI OpenCV dependency is API-compatible with the headless wheel we
+# intentionally install. Normalize its installed metadata so `pip check` and
+# dependency scanners do not report the deliberate substitution as broken.
+RUN pip install --no-cache-dir --no-deps /wheels/*.whl \
+    && sed -i 's/^Requires-Dist: opencv_python/Requires-Dist: opencv-python-headless/' \
+       /usr/local/lib/python3.11/site-packages/rapidocr-*.dist-info/METADATA \
+    && pip check \
+    && rm -rf /wheels
 
-# Create appuser with explicit uid/gid 568. Numeric so Kubernetes
-# `runAsNonRoot` validation succeeds and matches ElfHosted's per-app
-# convention (see helmrelease-postersplus.yaml securityContext).
+# Bake the PP-OCRv5 Mobile detector into the image.  TEXTLESS_TEXT_DETECTION is
+# on by default, so baking avoids the one-time ~4.6MB runtime download that would
+# otherwise stall the first low-vote textless request, and it survives cache-
+# volume wipes / works on air-gapped hosts.  Adds ~4.6MB to the image, and makes
+# the build depend on PPOCR_MODEL_URL being reachable.  Opt out for a lean image
+# (e.g. if you disable detection) — the model then downloads once at runtime:
+#   docker build --build-arg BAKE_PPOCR_MODEL=false ...
+#   (or set BAKE_PPOCR_MODEL=false in .env when building via compose)
+ARG BAKE_PPOCR_MODEL=true
+ARG PPOCR_MODEL_URL=https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.8.0/onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx
+ARG PPOCR_MODEL_SHA256=4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae
+RUN if [ "$BAKE_PPOCR_MODEL" = "true" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends curl && \
+      mkdir -p /app/models && \
+      curl -fsSL "$PPOCR_MODEL_URL" -o /app/models/ch_PP-OCRv5_det_mobile.onnx && \
+      echo "$PPOCR_MODEL_SHA256  /app/models/ch_PP-OCRv5_det_mobile.onnx" | sha256sum -c - && \
+      apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
+    fi
+
+# ElfHosted fork: explicit numeric uid/gid 568 so Kubernetes runAsNonRoot
+# validation succeeds without resolving /etc/passwd, matching ElfHosted's
+# per-app convention (helmrelease securityContext).
 RUN groupadd --gid 568 appuser \
     && useradd --uid 568 --gid 568 --shell /bin/sh --create-home appuser
 
-# Copy app files and create cache dir while still root, then hand ownership over.
+# Copy app files and create the cache + Prometheus multiproc dirs while still
+# root, then hand ownership to 568. The cache dir is a runtime volume mount;
+# on k8s fsGroup fixes its permissions, on compose chown the host dir before
+# first `up` (see compose.yaml).
 COPY . .
-RUN mkdir -p /app/cache /app/cache/tmdb_posters /app/cache/tmdb_logos \
-                /tmp/postersplus-prom \
+RUN mkdir -p /app/cache/tmdb_posters /app/cache/tmdb_logos /app/cache/composites \
+             /tmp/postersplus-prom \
     && chown -R 568:568 /app /tmp/postersplus-prom
 
-# Numeric so kubelet can verify runAsNonRoot without resolving /etc/passwd.
+# Numeric so kubelet can verify runAsNonRoot without /etc/passwd.
 USER 568
 
-# Healthcheck via curl is lighter than spawning python.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fs http://localhost:8000/live || exit 1
-
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/live', timeout=4)" || exit 1
 CMD ["/bin/sh", "entrypoint.sh"]

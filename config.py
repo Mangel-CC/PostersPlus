@@ -7,7 +7,6 @@
 #     See the docstring at the top of discovery.py for the full format,
 #     or the project README for a ready-made sample.
 import os
-import json
 
 # Storage
 
@@ -15,10 +14,9 @@ DB_PATH               = "/app/cache/cache.db"
 BADGE_DIR             = "/app/badges"
 TMDB_POSTER_CACHE_DIR = "/app/cache/tmdb_posters" # base posters from TMDB
 TMDB_LOGO_CACHE_DIR   = "/app/cache/tmdb_logos" # base logos from TMDB
-# Composite blob cache (Phase 10) — local backend uses this dir, S3
-# backend ignores it. Composite bytes used to live in the relational DB
-# as BYTEA; now they live here (filesystem) or in an S3 bucket when
-# OBJECT_STORE_URL is set.
+# Composite blob cache (ElfHosted fork) — the local blobstore backend uses
+# this dir; the S3 backend ignores it. Composite JPEG bytes live here (or in
+# an S3 bucket when OBJECT_STORE_URL is set) instead of in the relational DB.
 COMPOSITE_BLOB_DIR    = "/app/cache/composites"
 
 # Environment
@@ -26,76 +24,86 @@ COMPOSITE_BLOB_DIR    = "/app/cache/composites"
 ACCESS_KEY            = os.environ.get("ACCESS_KEY")
 AIOSTREAMS_URL        = os.environ.get("AIOSTREAMS_URL", "")
 AIOSTREAMS_AUTH       = os.environ.get("AIOSTREAMS_AUTH", "")
+
+# Quality source selection.
+# QUALITY_SOURCE: "aiostreams" (default) or "scraper".
+# SCRAPER_URL:    Stremio addon manifest/base URL — only used when QUALITY_SOURCE=scraper.
+#                 Example: https://torrentio.stremio.ru/{config}/manifest.json
+# Setting QUALITY_SOURCE=scraper while AIOSTREAMS_URL/AUTH are also set is a
+# misconfiguration — the scraper path is ignored and a warning is logged at startup.
+QUALITY_SOURCE        = os.environ.get("QUALITY_SOURCE", "aiostreams").lower().strip()
+SCRAPER_URL           = os.environ.get("SCRAPER_URL", "").strip()
 SERVER_TMDB_KEY       = os.environ.get("TMDB_API_KEY", "").strip()
 SERVER_MDBLIST_KEY    = os.environ.get("MDBLIST_API_KEY", "").strip()
+SERVER_MDBLIST_KEY_2  = os.environ.get("MDBLIST_API_KEY_2", "").strip()
 
-# Hosted-mode storage backend (ElfHosted fork).
-#
-# When DATABASE_URL is set to a postgresql:// URL, the cache layer switches
-# from SQLite to PostgreSQL. Unset (the default) preserves upstream behaviour.
-# See storage/__init__.py for backend selection logic.
+# Ordered list of all configured server-side MDBList keys (primary first).
+# Used by the key-rotation logic in main.py to fall back when a key is exhausted.
+SERVER_MDBLIST_KEYS: list[str] = [k for k in [SERVER_MDBLIST_KEY, SERVER_MDBLIST_KEY_2] if k]
+
+# --- Hosted-mode pluggable backends (ElfHosted fork) ----------------------
+# All opt-in: unset, every selector falls back to the upstream-equivalent
+# default (SQLite / in-process / local filesystem), so a vanilla deploy is
+# byte-for-byte upstream behaviour.
+
+# Storage backend. A postgresql:// URL switches the cache layer from SQLite
+# to PostgreSQL. See storage/__init__.py.
 DATABASE_URL          = os.environ.get("DATABASE_URL", "").strip()
 DB_POOL_MIN_SIZE      = int(os.environ.get("DB_POOL_MIN_SIZE", "1"))
 DB_POOL_MAX_SIZE      = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))
 
-# Hosted-mode coordination backend (ElfHosted fork — Phase 2).
-#
-# When REDIS_URL is set, MDBList rate-limit backoff and background-quality
-# fetch claims are stored in Redis so multiple replicas share state. Unset
-# (default) keeps per-process dicts — identical to upstream. Render
-# coalescing remains per-process either way.
+# Coordination backend. When REDIS_URL is set, MDBList rate-limit backoff,
+# the fleet-wide 429 cooldown, background-quality claims, leader-election
+# leases, and per-tenant rate limits are stored in Redis so replicas share
+# state. Unset keeps per-process state. See coordination/__init__.py.
 REDIS_URL             = os.environ.get("REDIS_URL", "").strip()
 REDIS_KEY_PREFIX      = os.environ.get("REDIS_KEY_PREFIX", "postersplus").strip() or "postersplus"
 
-# Hosted-mode blob store (ElfHosted fork — Phase 3).
-#
-# When OBJECT_STORE_URL is set, TMDB poster and logo bytes go to an
-# S3-compatible object store instead of the local filesystem. Unset (default)
-# preserves upstream behaviour. The composite poster cache (final_poster_cache
-# table) stays in the relational backend either way.
-#
+# Blob store for composite poster bytes. When OBJECT_STORE_URL is set, bytes
+# go to an S3-compatible object store instead of COMPOSITE_BLOB_DIR.
 # URL format: s3://<bucket>?endpoint=<https://...>&region=<region>&prefix=<prefix>
 OBJECT_STORE_URL        = os.environ.get("OBJECT_STORE_URL", "").strip()
-# Optional CDN public URL — when set, hosted-mode storage backends can return
-# 302 redirects to the CDN for blob bytes instead of proxying them. Leaving
-# this unset is fine; bytes will be fetched server-side as needed.
+# Optional CDN public URL — when set, the /poster and /p paths can 302 to the
+# CDN for composite bytes instead of proxying them through the app pod.
 OBJECT_STORE_PUBLIC_URL = os.environ.get("OBJECT_STORE_PUBLIC_URL", "").strip()
 
-# Hosted-mode resource ceilings (ElfHosted fork — Phase 4).
-#
-# RENDER_CONCURRENCY caps the number of Pillow renders in flight at once.
-# Each render uses one CPU core fully + ~10MB of transient RAM, so a burst
-# of unique-param requests can otherwise pin every core and exhaust the
-# event loop. Default is os.cpu_count() so single-tenant deployments behave
-# the same as upstream (no artificial cap below available cores).
+# --- Hosted-mode resource ceilings (ElfHosted fork) -----------------------
+# RENDER_CONCURRENCY caps Pillow renders in flight at once. Each render pins a
+# CPU core + ~10MB transient RAM; a burst of unique-param requests would
+# otherwise saturate every core and stall the event loop. Default = cpu_count
+# so single-tenant deploys behave like upstream (no artificial cap).
 RENDER_CONCURRENCY      = int(os.environ.get("RENDER_CONCURRENCY", "0")) or (os.cpu_count() or 2)
-# How long /poster will wait for a render slot before returning 503. Set to
-# 0 to never timeout (wait forever). Default of 30s gives clients a clear
-# signal to back off when the server is saturated.
+# How long /poster waits for a render slot before returning 503. 0 = wait
+# forever; default 30s gives saturated clients a clear back-off signal.
 RENDER_QUEUE_TIMEOUT    = float(os.environ.get("RENDER_QUEUE_TIMEOUT", "30"))
 
-# Hosted-mode observability (ElfHosted fork — Phase 6).
-#
-# Optional shared secret guarding /metrics. Unset (default) leaves /metrics
-# open; operators should bind the app behind an ingress that gates it.
+# --- Hosted-mode observability (ElfHosted fork) ---------------------------
+# Optional shared secret guarding /metrics. Unset leaves it open (gate at the
+# ingress). LOG_FORMAT=json emits structured JSON log lines (Loki/ES);
+# default "text" is upstream behaviour.
 METRICS_ACCESS_KEY      = os.environ.get("METRICS_ACCESS_KEY", "").strip()
-# When LOG_FORMAT=json, logs become structured JSON lines (one object per
-# record). Useful when shipping to Loki/Elasticsearch. Default = text
-# (upstream behaviour).
 LOG_FORMAT              = os.environ.get("LOG_FORMAT", "text").strip().lower()
 
-# Per-tenant rate limit (ElfHosted fork — Phase 8).
-# Maximum /poster requests per tenant per second. 0 disables the limit
-# (upstream behaviour). Tenant identity is sha256(user-key)[:16] when users
-# supply their own TMDB/MDBList key; otherwise "operator".
+# --- Per-tenant rate limit (ElfHosted fork) -------------------------------
+# Max /poster (and /p) requests per tenant per second. 0 disables (upstream
+# behaviour). Tenant identity = sha256(user-key)[:16] when users bring their
+# own TMDB/MDBList key; otherwise "operator" (/poster) or "preset" (/p).
 RATE_LIMIT_RPS          = int(os.environ.get("RATE_LIMIT_RPS", "0"))
 
-# Max concurrent outbound MDBlist API calls (ported from upstream v1.0.0).
-# MDBlist queues or drops requests when hit with too many simultaneous
-# connections from the same key, causing ReadTimeouts even when the service
-# is healthy. 3 is comfortably within their apparent per-key concurrency
-# limit while still allowing good parallelism. Set to 0 to disable the cap.
-MDBLIST_CONCURRENCY     = int(os.environ.get("MDBLIST_CONCURRENCY", "3"))
+# --- Static-preset moat (ElfHosted fork) ----------------------------------
+# When PRESET_ENABLED, anonymous requests can hit a small set of named visual
+# presets via /p/{preset}/{type}/{imdb_id}.jpg without supplying any key — the
+# operator's server keys are used, rating/quality/text-detection are read from
+# cache only (never fetched), and PRESET_CDN_CACHE_TTL sets the Cache-Control
+# max-age on cached preset responses (deterministic per preset+title, so a far
+# longer TTL than CDN_CACHE_TTL is safe).
+PRESET_ENABLED        = os.environ.get("PRESET_ENABLED", "").strip().lower() in ("1", "true", "yes")
+PRESET_CDN_CACHE_TTL  = int(os.environ.get("PRESET_CDN_CACHE_TTL", "86400"))
+# Floor on anonymous /search and /resolve-imdb (the public preset flow needs
+# the title picker). RATE_LIMIT_RPS only gates /poster + /p; without this
+# independent floor an operator who left RATE_LIMIT_RPS=0 would leave the TMDB
+# proxy endpoints unthrottled. 0 disables (fully private deploys).
+ANONYMOUS_TMDB_RPS    = int(os.environ.get("ANONYMOUS_TMDB_RPS", "5"))
 
 # Workers
 # CDN cache TTL (seconds). When > 0, poster responses include a
@@ -105,49 +113,11 @@ CDN_CACHE_TTL         = int(os.environ.get("CDN_CACHE_TTL", "0"))
 # JPEG output quality for composited posters (70–95). Higher = better quality, larger files.
 JPEG_QUALITY          = max(70, min(95, int(os.environ.get("JPEG_QUALITY", "85"))))
 
-# Phase 11: public preset endpoint (/p/{preset}/{type}/{imdb_id}.jpg).
-# When PRESET_ENABLED is true, anonymous requests can hit a small set of
-# named visual presets without supplying access_key / tmdb_key / mdblist_key.
-# The operator's server-configured keys are used; PRESET_CDN_CACHE_TTL
-# controls the Cache-Control max-age on preset responses (defaults to 1
-# day — much longer than CDN_CACHE_TTL since presets are deterministic
-# per (preset, type, imdb_id) and don't change with query params).
-PRESET_ENABLED        = os.environ.get("PRESET_ENABLED", "").strip().lower() in ("1", "true", "yes")
-PRESET_CDN_CACHE_TTL  = int(os.environ.get("PRESET_CDN_CACHE_TTL", "86400"))
-
-# When true, /p/ falls through to a live MDBlist fetch for any imdb_id
-# that doesn't have a cached rating row. Originally /p/ never called
-# MDBlist (the comment in main.py:get_preset_poster spells out the
-# original rationale: anonymous traffic must not burn the operator's
-# MDBlist quota). That made the preset path stuck-N/A on instances
-# where /poster is gated (PRESET_ENABLED + no ACCESS_KEY → /poster
-# is 403 → rating cache never warms → every /p render shows "N/A").
-#
-# Safe to enable now because elf.2 added the fleet-wide global cooldown
-# inside _fetch_rating_throttled — a runaway burst on /p can no longer
-# fan out into hundreds of 429s. Worst case is 120s of paused MDBlist
-# traffic, during which queued /p requests render without rating and
-# fall through to N/A (the original behaviour).
-#
-# Defaults to false to preserve existing-deployment behaviour;
-# public-tier instances should set this to "true" via configmap.
-PRESET_MDBLIST_FETCH  = os.environ.get("PRESET_MDBLIST_FETCH", "").strip().lower() in ("1", "true", "yes")
-
-# Floor on anonymous /search and /resolve-imdb requests. These endpoints
-# became anonymous in the Phase 11 follow-up so the public preset flow
-# can use the title picker. RATE_LIMIT_RPS (default 0 = disabled) only
-# gates /poster + /p; without this independent floor, an operator who
-# never set RATE_LIMIT_RPS would leave the TMDB proxy endpoints
-# completely unthrottled and let any visitor burn the server TMDB quota.
-# Set to 0 to disable (e.g. for fully private deployments where the
-# configurator and proxies are already on an authenticated network).
-ANONYMOUS_TMDB_RPS    = int(os.environ.get("ANONYMOUS_TMDB_RPS", "5"))
-
 # Feature Defaults 
 
 SHOW_RATING_DISPLAY_MODE = 1
 SHOW_AWARD_SASH          = True
-BADGE_DISPLAY_MODE = 2
+BADGE_DISPLAY_MODE       = 4
 
 # Poster Dimensions (500x750)
 
@@ -161,23 +131,23 @@ NUMERIC_SCORE_MODE_FONT_SIZE_RATIO = 0.10   # font size in numeric mode
 MINIMALIST_MODE_FONT_SIZE_RATIO    = 0.055  # font size in minimalist mode
 ACCENT_BAR_MODE_FONT_Y_OFFSET      = 0.90   # vertical alignment in accent bar mode
 NUMERIC_SCORE_MODE_FONT_Y_OFFSET   = 0.90   # vertical alignment in numeric score mode
-MINIMALIST_MODE_FONT_X_OFFSET      = 0.04   # horizontal distance from right edge in minimalist mode
+MINIMALIST_MODE_FONT_X_OFFSET      = 0.05   # horizontal distance from right edge in minimalist mode
 MINIMALIST_MODE_FONT_Y_OFFSET      = 0.92   # vertical position in minimalist mode (0=top, 1=bottom)
 
 SCORE_GLOW_THRESHOLD = 85  # score threshold to activate glow
-SCORE_GLOW_BLUR      = 2    # blur applied in glow mode
+SCORE_GLOW_BLUR      = 1    # blur applied in glow mode
 SCORE_GLOW_ALPHA     = 40   # alpha of the glow applied
 
 # Logo Defaults
 
-LOGO_MAX_W_RATIO  = 0.84   # max width of logo
-LOGO_MAX_H_RATIO  = 0.17   # max height of logo
+LOGO_MAX_W_RATIO  = 0.75   # target/max width of logo — the span every logo normalises to
+LOGO_MAX_H_RATIO  = 0.25   # max height of logo (paired with LOGO_ABS_MAX_H px cap)
 LOGO_BOTTOM_RATIO = 0.28   # distance of logo from the bottom
 DEFAULT_LOGO_LANGUAGE = os.environ.get("DEFAULT_LOGO_LANGUAGE", "en")
 
 # Quality Badge Defaults
 
-BADGE_HEIGHT = 32   # quality badge height in pixels
+BADGE_HEIGHT = 20   # quality badge height in pixels
 BADGE_GAP    = 8    # gap between horizontal stack badges in pixels
 
 BADGE_ANCHOR_X_RATIO = 0.050   # x offset from left
@@ -200,6 +170,17 @@ QUALITY_OLD_CACHE_DURATION   = int(os.environ.get("QUALITY_OLD_CACHE_DURATION", 
 # titles scroll into view simultaneously so AIOStreams isn't overwhelmed.
 QUALITY_BG_CONCURRENCY       = int(os.environ.get("QUALITY_BG_CONCURRENCY", "5"))
 
+# Seconds to wait for a quality fetch when wait_for_quality=true is requested.
+# Should be generous enough to allow for slow scrapers (Torrentio, Comet) but
+# not so long it stalls a poster-warm run indefinitely.
+QUALITY_WAIT_TIMEOUT         = float(os.environ.get("QUALITY_WAIT_TIMEOUT", "30"))
+
+# Max concurrent outbound MDBlist API calls.  MDBlist queues or drops requests
+# when hit with too many simultaneous connections from the same key, causing
+# ReadTimeouts even when the service is healthy.  3 is comfortably within their
+# apparent per-key concurrency limit while still allowing good parallelism.
+MDBLIST_CONCURRENCY          = int(os.environ.get("MDBLIST_CONCURRENCY", "3"))
+
 # Digital release (r/movieleaks) scraper settings
 DIGITAL_RELEASE_MIN_AGE_DAYS = 1    # ignore posts younger than this (mods still cleaning up)
 DIGITAL_RELEASE_MAX_AGE_DAYS = 30   # expire entries older than this from the cache
@@ -213,6 +194,10 @@ COMPOSITE_CACHE_TTL        = int(os.environ.get("COMPOSITE_CACHE_TTL", "604800")
 # Maximum number of composite cache entries. When exceeded the oldest entries are
 # evicted on each insert to keep the table at this size. 0 = no cap (rely on TTL alone).
 COMPOSITE_MAX_ENTRIES      = int(os.environ.get("COMPOSITE_MAX_ENTRIES", "0"))
+# Set to any truthy value (1, true, yes) to skip composite cache reads and writes
+# entirely. Every request re-renders from scratch. Useful during development when
+# iterating on rendering changes and you don't want stale renders served.
+DISABLE_COMPOSITE_CACHE    = os.environ.get("DISABLE_COMPOSITE_CACHE", "").strip().lower() in ("1", "true", "yes")
 
 def _parse_bool_env(key: str, default: bool = False) -> bool:
     val = os.environ.get(key, "").strip().lower()
@@ -220,9 +205,67 @@ def _parse_bool_env(key: str, default: bool = False) -> bool:
         return default
     return val not in ("0", "false", "no")
 
+# Logo legibility: when a flat logo's average colour is too close to the poster
+# background, recolour it (white / black / complementary accent) so it reads.
+# Experimental and off by default while it's being tested — it can mis-handle
+# some logos.  Set LOGO_CONTRAST_RESCUE=true to enable.
+LOGO_CONTRAST_RESCUE       = _parse_bool_env("LOGO_CONTRAST_RESCUE", False)
+# Emit per-logo sizing telemetry (source dims, aspect, final dims) at INFO level.
+# Off by default — handy when tuning the logo size caps.
+DEBUG_LOGO_SIZING          = _parse_bool_env("DEBUG_LOGO_SIZING", False)
+
+# Prefer textless posters with enough votes to be meaningful, but never allow
+# vote count alone to select art rated far below the best available option.
+TMDB_POSTER_MIN_VOTES      = max(0, int(os.environ.get("TMDB_POSTER_MIN_VOTES", "3")))
+TMDB_POSTER_MAX_SCORE_DROP = max(
+    0.0, float(os.environ.get("TMDB_POSTER_MAX_SCORE_DROP", "1.0"))
+)
+
+# Logo fill-stretch: a slim logo whose clamped size leaves it looking lost may be
+# enlarged toward its size cap by up to this factor (one axis only) so it has more
+# presence.  1.0 = no enlargement.  Off by default — set LOGO_STRETCH_DISABLED=false
+# to enable it; LOGO_STRETCH_FACTOR then sets how aggressive the enlargement is.
+LOGO_STRETCH_DISABLED      = _parse_bool_env("LOGO_STRETCH_DISABLED", True)
+LOGO_STRETCH_FACTOR        = max(1.0, float(os.environ.get("LOGO_STRETCH_FACTOR", "1.2")))
+
+# Detect burned-in title text on posters TMDB mislabelled as "textless".  When
+# detected, PostersPlus skips compositing its own logo/title so you don't get a
+# double title.  Uses the PP-OCRv5 Mobile detector (one-time ~4.6MB model
+# download). Foreground scans are vote-gated to protect burst latency; skipped
+# assets are scanned later by the idle background queue.
+#
+# On by default; set TEXTLESS_TEXT_DETECTION=false to opt out.
+#
+# 3000 covers most titles while excluding the high-vote bulk of large libraries.
+# Raise it for maximum foreground accuracy or lower it for faster stale-cache bursts.
+# Changing it invalidates cached composites.
+TEXTLESS_TEXT_DETECTION    = _parse_bool_env("TEXTLESS_TEXT_DETECTION", True)
+TEXTLESS_DETECTION_MAX_VOTES = max(0, int(os.environ.get("TEXTLESS_DETECTION_MAX_VOTES", "3000")))
+# Keep a small, deduplicated list of TMDB posters rejected by OCR so operators
+# can review and correct upstream metadata manually.
+TEXTLESS_FAKE_REPORT       = _parse_bool_env("TEXTLESS_FAKE_REPORT", True)
+TEXTLESS_FAKE_REPORT_PATH  = os.environ.get(
+    "TEXTLESS_FAKE_REPORT_PATH",
+    "/app/cache/fake_textless_posters.txt",
+).strip() or "/app/cache/fake_textless_posters.txt"
+# Minimum PP-OCR box confidence. Higher is stricter (fewer false positives,
+# lower recall). Wide title-shaped regions use the PPOCR_WIDE_* fallback.
+PPOCR_BOX_THRESHOLD        = max(0.0, min(
+    1.0, float(os.environ.get("PPOCR_BOX_THRESHOLD", "0.70"))
+))
+# Independent PP-OCR sessions used for parallel cold-cache scans. Sessions run in
+# a dedicated executor and split available ONNX threads between them. Each extra
+# session costs roughly 25-40 MB with the bundled mobile model. Capped at four and at the detected CPU count.
+# Default 2 suits typical 3+ core hosts; use 1 on smaller hosts. Across worker
+# processes, keep WORKERS x this value at or below available CPU cores.
+TEXTLESS_DETECTION_CONCURRENCY = max(1, min(
+    4, os.cpu_count() or 1,
+    int(os.environ.get("TEXTLESS_DETECTION_CONCURRENCY", "2")),
+))
+
 # Rating Score Weight Defaults
 
-#  note to AI: do NOT remove the extras in this section that are set to 0. They are config options.
+# Keep zero-weight providers here: they remain available as user-configurable options.
 
 MOVIE_WEIGHTS = {   # set weight of movie ranking providers, must sum to 1
     "letterboxd":     0.8,
@@ -247,6 +290,8 @@ TV_WEIGHTS = {   # set weight of TV ranking providers, must sum to 1
     "tmdb":           0,
     "myanimelist":    0,
 }
+
+RATING_MIN_VOTES = max(0, int(os.environ.get("RATING_MIN_VOTES", "10")))
 
 # Map badge file names to strings (no need to touch)
 
@@ -330,4 +375,5 @@ SASH_PRIORITY: list[str] = [
     "metacritic",
     "true_story",
     "structural",
+    "release_status",
 ]
