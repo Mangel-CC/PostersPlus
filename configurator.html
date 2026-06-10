@@ -1900,15 +1900,17 @@
      and the preset gallery (Load Preset modal) are untouched — those are how
      a public visitor picks a look. None of this fires unless JS adds the
      body.preset-only-mode class (preset_enabled && !access_key_valid). */
-  body.preset-only-mode .tab-bar { display: none !important; }
-  /* Force the Core tab visible and every other tab section hidden,
-     regardless of showTab()'s inline display toggles. */
-  body.preset-only-mode #tab-host .section[data-tab="core"] { display: block !important; }
-  body.preset-only-mode #tab-host .section:not([data-tab="core"]) { display: none !important; }
-  /* Inside Core: hide the Core Config section header and every per-user knob
-     (TMDB / MDBlist keys, primary client, language) so only the title search
-     field remains. The first .field in the section is the search box. */
-  body.preset-only-mode #tab-host .section[data-tab="core"] > .section-header { display: none !important; }
+  /* READ-ONLY SHOWCASE (ElfHosted fork): a public visitor sees the FULL
+     private-instance UI — every tab, every slider — but the controls are
+     inert. Only the preset picker, the title search, and tab navigation stay
+     interactive; picking a preset fills the (read-only) controls so visitors
+     see exactly what that preset configures. The tab bar sits outside
+     #tab-host, so it keeps working. */
+  body.preset-only-mode #tab-host { pointer-events: none; }
+  body.preset-only-mode #tab-host .field:not(#lock-preset-field):not(#core-search-field) { opacity: 0.6; }
+  body.preset-only-mode #lock-preset-field,
+  body.preset-only-mode #core-search-field { pointer-events: auto; }
+  /* API key fields are credentials, not a feature to showcase — keep hidden. */
   body.preset-only-mode .lock-hide-field { display: none !important; }
   /* Prominent preset picker: hidden in the normal tabbed UI (the gallery is
      reached via the Load Preset console icon there), shown in lock mode. */
@@ -2042,10 +2044,11 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
     <div class="lock-banner-text">
       <div class="lock-banner-title">Public access — preset selection only</div>
       <div class="lock-banner-body">
-        To keep the public instance scalable, customization is limited
-        to ready-made presets. Pick a look from <strong>Poster Style</strong>,
-        search a title, and copy the poster URL. For full per-poster control
-        (all the sliders), run your own instance:
+        To keep the public instance scalable, editing is limited to ready-made
+        presets. Pick a look from <strong>Poster Style</strong> and search a
+        title to get a copyable poster URL — browse the tabs below to see what
+        each preset configures. To edit every setting yourself, run your own
+        instance:
       </div>
     </div>
     <div class="lock-banner-cta-row">
@@ -2147,7 +2150,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               <div class="field-hint">Pick a look, then search a title below to get a copyable poster URL.</div>
             </div>
 
-            <div class="field">
+            <div class="field" id="core-search-field">
               <label class="field-label">Content Search</label>
               <div class="search-wrap">
                 <div class="search-input-row">
@@ -2202,7 +2205,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               <input type="text" id="cfg-mdblist-key" placeholder="If blank uses server key." oninput="build(); queuePreviewReload(); saveApiKeys()">
               <div class="field-hint" id="mdblist-key-hint" style="display:none"></div>
             </div>
-            <div class="field lock-hide-field">
+            <div class="field">
               <label class="field-label">Primary Client</label>
               <select id="cfg-primary-client" onchange="onPrimaryClientChange()">
                 <option value="stremio_tv_nuvio" selected>Stremio TV, Nuvio, Plex, Jellyfin</option>
@@ -2210,7 +2213,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </select>
               <div class="field-hint">Sets recommended bar and notch insets. Both remain manually adjustable.</div>
             </div>
-            <div class="field lock-hide-field">
+            <div class="field">
               <label class="field-label">User Native Language</label>
               <select id="cfg-language" oninput="build(); queuePreviewReload(); saveApiKeys()">
                 <option value="en" selected>English ★</option>
@@ -2255,7 +2258,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </select>
               <div class="field-hint">★ indicates the poster text is fully translated, not just the logo.</div>
             </div>
-            <div class="field lock-hide-field" style="margin-top:6px;">
+            <div class="field" style="margin-top:6px;">
               <label class="field-label">Language Priority</label>
               <select id="cfg-logo-priority" onchange="build(); queuePreviewReload()">
                 <option value="native_original" selected>Native &gt; Original &gt; Text</option>
@@ -2265,7 +2268,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </select>
               <div class="field-hint">Original is the source language of the content, text is plain text.</div>
             </div>
-            <div class="field lock-hide-field" style="margin-top:6px;">
+            <div class="field" style="margin-top:6px;">
               <label class="field-label">Fallback Poster Style</label>
               <select id="cfg-fallback-bg-style" onchange="build(); queuePreviewReload()">
                 <option value="minimal">Textured Backdrop</option>
@@ -2273,7 +2276,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </select>
               <div class="field-hint"><a href="#" onclick="openFallbackGallery(); return false;">Displayed if no poster can be found.</a>.</div>
             </div>
-            <div class="field cfg-sep lock-hide-field">
+            <div class="field cfg-sep">
               <label class="field-label">Top Vignette</label>
               <select id="cfg-top-gradient" onchange="build(); queuePreviewReload()">
                 <option value="off">Off</option>
@@ -2283,7 +2286,7 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
               </select>
               <div class="field-hint">The power of the darkening applied to the top.</div>
             </div>
-            <div class="field lock-hide-field">
+            <div class="field">
               <label class="field-label">Bottom Vignette</label>
               <select id="cfg-bottom-gradient" onchange="build(); queuePreviewReload()">
                 <option value="off">Off</option>
@@ -4428,22 +4431,29 @@ function loadPreset(id) {
   const preset = PRESETS.find(p => p.id === id);
   if (!preset) return;
   // ── ELFHOSTED FORK: locked public-tier branch ──
-  // Instead of filling the form (which is hidden anyway), record the chosen
-  // preset and emit a /p/{preset}/{type}/{imdb_id}.jpg URL for the selected
-  // title. The preset card id matches the server-side presets.py id exactly.
+  // Public lock mode is a read-only SHOWCASE: fill the (inert) controls with
+  // the preset's params so visitors see exactly what it configures, record the
+  // chosen preset, and emit a /p/{preset}/{type}/{imdb_id}.jpg URL. The preset
+  // card id matches the server-side presets.py id exactly.
   if (lockModeActive) {
     lockedPresetId = preset.id;
     closePresetModal();
     // Reflect the choice on the prominent picker button.
     const lockLabel = document.getElementById('lock-preset-label');
     if (lockLabel) lockLabel.textContent = preset.name;
+    // Fill the read-only controls so the tabbed UI mirrors the preset, just as
+    // a private instance would render it.
+    const domain = (vEl('cfg-domain') || window.location.origin).replace(/\/$/, '');
+    importUrl(`${domain}/poster?tmdb_id=%7Btmdb_id%7D&imdb_id=%7Bimdb_id%7D&type=%7Btype%7D&${preset.params}`,
+              { settingsOnly: true, preserveClientInsets: true });
+    // importUrl re-runs build(); re-assert the preset (and that we're still in
+    // lock mode's /p emission) in case the import reset anything.
+    lockedPresetId = preset.id;
     if (!resolvedImdbId) {
       setLog('preview-log', `Preset "${preset.name}" selected — search & select a title to preview / copy its URL.`, 'info');
     } else {
       setLog('preview-log', `Preset "${preset.name}" selected. Click the gold button to copy the /p/ URL.`, 'ok');
     }
-    // Refresh the copyable URL box (LAN/localhost) and the live preview so
-    // both reflect the freshly-chosen preset.
     build();
     queuePreviewReload();
     return;
