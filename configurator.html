@@ -3265,6 +3265,13 @@ async function fetchServerCaps() {
   if (versionEl && serverCaps.version) {
     versionEl.textContent = '· v' + serverCaps.version;
   }
+  // Upstream's "What's New" chip is hardcoded to a vX.Y-dev placeholder in the
+  // markup; surface the real fork build version there too so the header doesn't
+  // read "dev" on a released build.
+  const whatsNewEl = document.getElementById('whatsnew-version');
+  if (whatsNewEl && serverCaps.version) {
+    whatsNewEl.textContent = 'v' + serverCaps.version;
+  }
 }
 
 // ── ELFHOSTED FORK: PUBLIC-TIER LOCK ─────────────────────────────────────────
