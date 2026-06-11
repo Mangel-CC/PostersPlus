@@ -10,7 +10,7 @@
   "packages": {
     ".": {
       "release-type": "simple",
-      "package-name": "postersplus",
+      "component": "",
       "extra-files": [
         "version.txt"
       ]
