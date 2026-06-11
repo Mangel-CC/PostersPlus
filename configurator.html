@@ -1562,6 +1562,7 @@
     body { align-items: stretch; }
     .shell { min-width: 0; width: 100%; padding: 0 12px 80px; }
     .main-layout { grid-template-columns: 1fr; grid-template-rows: auto; width: 100%; height: auto; max-height: none; gap: 16px; align-items: start; }
+    .lock-banner { max-width: none; }   /* layout is full-width here; match it */
     .left-col { height: auto; overflow: visible; }
     .left-col .panel-body { overflow: visible; scrollbar-width:none}
     .right-col { height: auto; overflow: visible; position: static; }
@@ -1800,6 +1801,11 @@
     background: var(--black1);
     border: 1px solid var(--gold-dim);
     border-left: 3px solid var(--gold);
+    /* Match the .main-layout content width (430px + 20px gap + 414px) so the
+       banner aligns with the config + preview columns below it instead of
+       overhanging to the right. */
+    max-width: 864px;
+    box-sizing: border-box;
   }
   body.preset-only-mode .lock-banner { display: flex; }
   .lock-banner-title {
