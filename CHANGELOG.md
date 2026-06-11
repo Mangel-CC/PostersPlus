@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0-elf.6](https://github.com/elfhosted/PostersPlus/compare/v1.1.0-elf.5...v1.1.0-elf.6) (2026-06-11)
+
+
+### Bug Fixes
+
+* align public lock banner width with layout (v1.1.0-elf.6) ([7695ba6](https://github.com/elfhosted/PostersPlus/commit/7695ba6c2d2f4e4da7a550e320d5b779cf37bd22))
+* align public lock banner width with the layout ([0d8e87d](https://github.com/elfhosted/PostersPlus/commit/0d8e87d0ddb7fb6a2860ab261c741953b0e5f3ff))
+
 ## [1.1.0-elf.5](https://github.com/elfhosted/PostersPlus/compare/v1.1.0-elf.4...v1.1.0-elf.5) (2026-06-10)
 
 
