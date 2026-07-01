@@ -8,7 +8,7 @@ services:
         # BAKE_PPOCR_MODEL=false in your .env for a lean image that downloads the
         # model once at runtime instead.
         BAKE_PPOCR_MODEL: "${BAKE_PPOCR_MODEL:-true}"
-    image: PostersPlus
+    image: postersplus
     ports:
       - "8000:8000"
     restart: unless-stopped
