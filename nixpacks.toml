@@ -1,0 +1,7 @@
+[build]
+# Required system packages for building Python dependencies
+# pycairo needs cairo development libraries
+nixpkgs = ["cairo", "pkg-config", "python312"]
+
+[start]
+cmd = "python main.py"
