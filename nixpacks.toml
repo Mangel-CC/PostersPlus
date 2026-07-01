@@ -1,4 +1,0 @@
-[build]
-# Required system packages for building Python dependencies
-# pycairo needs cairo development libraries
-buildPackages = ["cairo", "pkg-config"]
