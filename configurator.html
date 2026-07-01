@@ -2636,6 +2636,15 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                 <div class="toggle-track"><div class="toggle-thumb"></div></div>
               </label>
             </div>
+            <div class="field" id="sash-episode-format-field" style="margin-top:8px;">
+              <div class="toggle-label">New Episode Label Format</div>
+              <select id="sel-episode-format" onchange="build(); queuePreviewReload()">
+                <option value="S{s}E{e}" selected>S1E1 (Season/Episode)</option>
+                <option value="T{s}E{e}">T1E1 (Temporada/Episodio)</option>
+                <option value="{s}x{e}">1x1</option>
+              </select>
+              <div class="field-hint">Label used by the "New Episode" sash slot when a series/anime aired a new episode recently.</div>
+            </div>
             <div class="toggle-row" id="sash-muted-row">
               <div>
                 <div class="toggle-label">Muted Sashes</div>
@@ -2792,6 +2801,16 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                 </label>
               </div>
               <div class="field-hint" id="greyscale-noquality-hint" style="display:none; margin-top:4px;">Desaturates the poster when no stream quality is found.</div>
+            </div>
+            <div class="toggle-row" id="quality-fallback-row" style="margin-top:8px;">
+              <div>
+                <div class="toggle-label">Release-based Quality Fallback</div>
+                <div class="field-hint" style="margin-top:4px;">When the quality source returns nothing, infer a conservative badge from release status (aired TV/anime → Web 1080p, digital movies → Web 1080p, physical → 1080p).</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="tog-quality-fallback" checked onchange="build(); queuePreviewReload()">
+                <div class="toggle-track"><div class="toggle-thumb"></div></div>
+              </label>
             </div>
             <div class="toggle-row" id="consider-available-field" style="display:none; margin-top:8px; border-bottom:none;">
               <div>
@@ -3035,6 +3054,7 @@ function onPrimaryClientChange({ rebuild = true } = {}) {
 const TMDB_IMG = 'https://image.tmdb.org/t/p/w92';
 
 const SASH_SLOTS = [
+  { id:'new_episode', label:'New Episode (S2E5 — TV/Anime)',    color:'#e05aa0' },
   { id:'wins',       label:'Best Picture / Major Emmy Win',     color:'#c9a84c' },
   { id:'gg_wins',    label:'Golden Globe Win',                  color:'#c9a84c' },
   { id:'festival',   label:'Festival Winner',                   color:'#c9a84c' },
@@ -4027,6 +4047,9 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
     || (ratingMode === 4 && vEl('cfg-bar4-append') === 'sash');
   if (_sashTextNeeded) {
     params.set('sash_priority', getSashPriorityParam());
+    // Episode label format — only emitted when it differs from the server default.
+    const _ef = vEl('sel-episode-format');
+    if (_ef && _ef !== 'S{s}E{e}') params.set('episode_format', _ef);
   }
 
   // ── Quality Badges ─────────────────────────────────────────────────────────
@@ -4049,6 +4072,10 @@ function buildBaseParams({ usePlaceholders = false, domainOverride = null } = {}
   if (c('tog-wait-quality') && [1,2,4].includes(badgeMode)) {
     params.set('wait_for_quality', 'true');
     if (c('tog-greyscale-noquality')) params.set('greyscale_no_quality', 'true');
+  }
+  // Release-based fallback is on by default server-side — only emit the opt-out.
+  if (badgeMode !== 0 && !c('tog-quality-fallback')) {
+    params.set('quality_release_fallback', 'false');
   }
 
   const finalUrl = `${domain}/poster?${params.toString()}`;
@@ -4602,6 +4629,7 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
   if (p.has('cinema_greyscale')) _setEl('tog-cinema-greyscale', p.get('cinema_greyscale'));
   if (p.has('cinema_greyscale_skip_if_available')) _setEl('tog-cinema-greyscale-skip', p.get('cinema_greyscale_skip_if_available'));
   if (p.has('release_status_cinema_only')) _setEl('tog-release-cinema-only', p.get('release_status_cinema_only'));
+  if (p.has('episode_format'))             _setEl('sel-episode-format',      p.get('episode_format'));
   if (p.has('muted'))           _setEl('tog-muted',         p.get('muted'));
   // sash_mode supersedes the legacy show_award_sash + sash_badge bools.
   if (p.has('sash_mode'))                _setEl('cfg-sash-mode', p.get('sash_mode'));
@@ -4684,6 +4712,7 @@ function importUrl(urlStr, { silent = false, settingsOnly = false, preserveClien
   if (p.has('combined_badge_stacked'))  _setEl('tog-badge-stacked',    p.get('combined_badge_stacked') === 'true');
   if (p.has('wait_for_quality'))   _setEl('tog-wait-quality', p.get('wait_for_quality'));
   if (p.has('greyscale_no_quality')) _setEl('tog-greyscale-noquality', p.get('greyscale_no_quality'));
+  if (p.has('quality_release_fallback')) _setEl('tog-quality-fallback', p.get('quality_release_fallback'));
 
   // ── Rating weights ──────────────────────────────────────────────────────
   function applyWeights(paramName, containerId, sources) {

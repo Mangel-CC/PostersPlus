@@ -33,6 +33,26 @@ AIOSTREAMS_AUTH       = os.environ.get("AIOSTREAMS_AUTH", "")
 # misconfiguration — the scraper path is ignored and a warning is logged at startup.
 QUALITY_SOURCE        = os.environ.get("QUALITY_SOURCE", "aiostreams").lower().strip()
 SCRAPER_URL           = os.environ.get("SCRAPER_URL", "").strip()
+
+# Release-based quality fallback. When the configured quality source
+# (AIOStreams/scraper) returns nothing — or none is configured — infer a
+# conservative badge from the title's release status instead of showing none:
+# aired TV/anime → WEB 1080p, movies on digital → WEB 1080p, physical → 1080p.
+# Overridable per request with ?quality_release_fallback=.
+QUALITY_RELEASE_FALLBACK = os.environ.get(
+    "QUALITY_RELEASE_FALLBACK", "true"
+).strip().lower() not in ("0", "false", "no")
+
+# New-episode sash (TV/anime). Shows e.g. "S2E5" when the latest episode
+# aired within EPISODE_SASH_MAX_AGE_DAYS. Label template uses {s} and {e}
+# placeholders — e.g. "T{s}E{e}" for Spanish-style "T1E1".
+EPISODE_SASH_FORMAT       = os.environ.get("EPISODE_SASH_FORMAT", "S{s}E{e}").strip() or "S{s}E{e}"
+EPISODE_SASH_MAX_AGE_DAYS = int(os.environ.get("EPISODE_SASH_MAX_AGE_DAYS", "7"))
+
+# Anime rating: when a title is detected as anime and MyAnimeList has a
+# rating for it, give MAL this share of the final weighted score (remaining
+# weight is redistributed over the regular TV weights). 0 disables.
+ANIME_MAL_WEIGHT = max(0.0, min(1.0, float(os.environ.get("ANIME_MAL_WEIGHT", "0.4"))))
 SERVER_TMDB_KEY       = os.environ.get("TMDB_API_KEY", "").strip()
 SERVER_MDBLIST_KEY    = os.environ.get("MDBLIST_API_KEY", "").strip()
 SERVER_MDBLIST_KEY_2  = os.environ.get("MDBLIST_API_KEY_2", "").strip()
@@ -360,6 +380,7 @@ SCORE_NORMALISERS = {
 # Default Sash Priority
 
 SASH_PRIORITY: list[str] = [
+    "new_episode",
     "wins",
     "gg_wins",
     "festival",

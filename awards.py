@@ -1397,6 +1397,8 @@ def draw_award_badge(
         border_rgb = (240, 100, 100)
     elif sash_type == "trending":
         border_rgb = (160, 220, 255)
+    elif sash_type == "anime":
+        border_rgb = (255, 150, 200)
     else:  # "nom"
         border_rgb = (192, 192, 200)
 
@@ -1714,6 +1716,9 @@ def draw_award_sash(
     elif sash_type == "trending":
         hi, lo        = (90, 170, 255, 255), (50, 110, 190, 255)
         border_colour = (160, 220, 255, 255)
+    elif sash_type == "anime":
+        hi, lo        = (225, 95, 155, 255), (160, 50, 105, 255)
+        border_colour = (255, 150, 200, 255)
     else:  # "nom"
         hi, lo        = (180, 180, 190, 255), (110, 110, 120, 255)
         border_colour = (192, 192, 200, 255)

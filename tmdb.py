@@ -309,6 +309,9 @@ async def fetch_poster_metadata(
             "text_backdrop_path":    meta.get("text_backdrop_path"),
             "original_poster_path":  meta.get("original_poster_path"),
             "poster_langs":          meta.get("poster_langs", {}),
+            "genre_ids":             meta.get("genre_ids", []),
+            "last_episode":          meta.get("last_episode") or {},
+            "origin_country":        meta.get("origin_country") or [],
         }
         return (
             meta["genre_ids"],
@@ -414,6 +417,22 @@ async def fetch_poster_metadata(
     tmdb_status          = data.get("status")   # e.g. "Released", "In Production", "Returning Series"
     vote_count           = data.get("vote_count")
 
+    # Last aired episode (TV only) — powers the "new_episode" sash (e.g. S2E5).
+    # Stored as {} for movies / shows with no aired episode so legacy-row
+    # detection (NULL column) can trigger a one-time refresh without looping.
+    _last_ep_raw = data.get("last_episode_to_air") or {}
+    last_episode: dict = {}
+    if _last_ep_raw.get("season_number") and _last_ep_raw.get("episode_number"):
+        last_episode = {
+            "season":   _last_ep_raw.get("season_number"),
+            "episode":  _last_ep_raw.get("episode_number"),
+            "air_date": _last_ep_raw.get("air_date"),
+        }
+
+    # Origin country — used with genre 16 (Animation) + original_language "ja"
+    # for anime detection. TMDB returns it for both movies and TV.
+    origin_country: list[str] = data.get("origin_country") or []
+
     # If the content's original language wasn't included in the initial image
     # request (e.g. a Romanian show fetched by an English-language user), TMDB
     # won't return native-language logos.  Do a cheap supplemental /images call
@@ -490,6 +509,8 @@ async def fetch_poster_metadata(
         text_backdrop_path=text_backdrop_path,
         original_poster_path=original_poster_path,
         poster_langs=poster_langs,
+        last_episode=last_episode,
+        origin_country=origin_country,
     )
 
     tmdb_data = {
@@ -505,6 +526,9 @@ async def fetch_poster_metadata(
         "text_backdrop_path":   text_backdrop_path,
         "original_poster_path": original_poster_path,
         "poster_langs":         poster_langs,
+        "genre_ids":            genre_ids,
+        "last_episode":         last_episode,
+        "origin_country":       origin_country,
     }
 
     return genre_ids, is_textless, logos, release_year, title, poster_path, backdrop_path, tmdb_data

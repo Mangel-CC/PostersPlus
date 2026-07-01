@@ -161,6 +161,8 @@ def _bootstrap_schema(conn) -> None:
             ("text_backdrop_path",  "TEXT"),
             ("original_poster_path","TEXT"),
             ("poster_langs_json",   "TEXT"),
+            ("last_episode_json",   "TEXT"),
+            ("origin_country_json", "TEXT"),
         ):
             cur.execute(
                 f"ALTER TABLE tmdb_metadata_cache ADD COLUMN IF NOT EXISTS {col} {definition}"
@@ -705,7 +707,7 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
                            runtime, number_of_seasons, number_of_episodes,
                            original_language, original_title, backdrop_path, tmdb_status, vote_count,
                            text_backdrop_path, original_poster_path,
-                           poster_langs_json
+                           poster_langs_json, last_episode_json, origin_country_json
                     FROM tmdb_metadata_cache
                     WHERE cache_key = %s
                     """,
@@ -722,7 +724,7 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
                     runtime, number_of_seasons, number_of_episodes,
                     original_language, original_title, backdrop_path, tmdb_status, vote_count,
                     text_backdrop_path, original_poster_path,
-                    poster_langs_json,
+                    poster_langs_json, last_episode_json, origin_country_json,
                 ) = row
 
                 age_days = (time.time() - cached_at) / 86400
@@ -735,11 +737,14 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
                     conn.commit()
                     return None
 
-                # Rows created before vote_count or original_title was added were migrated
-                # with NULL. Refresh once so detection has complete title aliases.
-                if vote_count is None or original_title is None:
+                # Rows created before vote_count, original_title or
+                # last_episode_json was added were migrated with NULL.
+                # Refresh once so detection has complete title aliases and
+                # episode/anime data. Fresh writes store "{}" / "[]"
+                # sentinels so this never loops.
+                if vote_count is None or original_title is None or last_episode_json is None:
                     logger.info(
-                        f"TMDB metadata cache missing vote_count or original_title for {cache_key}; refreshing"
+                        f"TMDB metadata cache missing vote_count, original_title or last_episode for {cache_key}; refreshing"
                     )
                     cur.execute(
                         "DELETE FROM tmdb_metadata_cache WHERE cache_key = %s",
@@ -768,6 +773,8 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
                     "text_backdrop_path":   text_backdrop_path,
                     "original_poster_path": original_poster_path,
                     "poster_langs":         json.loads(poster_langs_json or "{}"),
+                    "last_episode":         json.loads(last_episode_json or "{}"),
+                    "origin_country":       json.loads(origin_country_json or "[]"),
                 }
     except Exception as exc:
         logger.error(f"TMDB metadata cache read error: {exc}")
@@ -796,6 +803,8 @@ def set_cached_tmdb_metadata(
     text_backdrop_path: str | None = None,
     original_poster_path: str | None = None,
     poster_langs: dict | None = None,
+    last_episode: dict | None = None,
+    origin_country: list | None = None,
 ) -> None:
     try:
         with _get_pool().connection() as conn:
@@ -809,8 +818,8 @@ def set_cached_tmdb_metadata(
                          runtime, number_of_seasons, number_of_episodes,
                          original_language, original_title, backdrop_path, tmdb_status, vote_count,
                          text_backdrop_path, original_poster_path,
-                         poster_langs_json)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         poster_langs_json, last_episode_json, origin_country_json)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (cache_key) DO UPDATE SET
                         title                = EXCLUDED.title,
                         release_year         = EXCLUDED.release_year,
@@ -831,7 +840,9 @@ def set_cached_tmdb_metadata(
                         vote_count           = EXCLUDED.vote_count,
                         text_backdrop_path   = EXCLUDED.text_backdrop_path,
                         original_poster_path = EXCLUDED.original_poster_path,
-                        poster_langs_json    = EXCLUDED.poster_langs_json
+                        poster_langs_json    = EXCLUDED.poster_langs_json,
+                        last_episode_json    = EXCLUDED.last_episode_json,
+                        origin_country_json  = EXCLUDED.origin_country_json
                     """,
                     (
                         cache_key,
@@ -855,6 +866,8 @@ def set_cached_tmdb_metadata(
                         text_backdrop_path,
                         original_poster_path,
                         json.dumps(poster_langs or {}),
+                        json.dumps(last_episode or {}),
+                        json.dumps(origin_country or []),
                     ),
                 )
             conn.commit()

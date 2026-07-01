@@ -283,9 +283,25 @@ _SASH_TYPES: dict[str, str] = {
     "true_story":      "info",      # teal
     "structural":      "info",      # teal
     "release_status":  "alert",     # red — Physical / Streaming / Cinema / Production
+    "new_episode":     "alert",     # red — latest episode aired recently (S2E5); pink for anime
 }
 
 NEW_RELEASE_DAYS = 14
+
+# Anime detection: TMDB genre 16 = Animation
+ANIMATION_GENRE_ID = 16
+
+
+def _within_days(date_str: str | None, max_days: int) -> bool:
+    """True if *date_str* (YYYY-MM-DD) is within *max_days* of today (not future)."""
+    if not date_str:
+        return False
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        delta = (date.today() - d).days
+        return 0 <= delta <= max_days
+    except ValueError:
+        return False
 
 
 def _is_recent(release_date: str | None) -> bool:
@@ -346,6 +362,14 @@ class DiscoveryMeta:
     # TV:     "Returning" | "Ended" | "Cancelled" | "Production"
     release_status: str | None = None
 
+    # New-episode sash (TV/anime) — label like "S2E5" when the latest episode
+    # aired within the configured window; None otherwise.
+    last_episode_label: str | None = None
+
+    # Anime detection: genre Animation + Japanese origin. Drives the dedicated
+    # "anime" sash palette and optional MAL rating boost.
+    is_anime: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Extraction helpers
@@ -371,6 +395,8 @@ def extract_discovery_meta(
     notable_cast:      dict[str, str] | None = None,
     festival_keywords: dict[str, str] | None = None,
     language_labels:   dict[str, str] | None = None,
+    episode_format:    str = "S{s}E{e}",
+    episode_max_age_days: int = 7,
 ) -> DiscoveryMeta:
     studios        = notable_studios   or NOTABLE_STUDIOS
     directors      = notable_directors or NOTABLE_DIRECTORS
@@ -470,6 +496,26 @@ def extract_discovery_meta(
     if _is_recent(release_date):
         meta.is_new_release = True
 
+    # --- Anime detection ---
+    # Genre Animation + Japanese origin (original language or origin country).
+    genre_ids      = tmdb_data.get("genre_ids") or []
+    origin_country = tmdb_data.get("origin_country") or []
+    meta.is_anime = (
+        ANIMATION_GENRE_ID in genre_ids
+        and (tmdb_data.get("original_language") == "ja" or "JP" in origin_country)
+    )
+
+    # --- New episode (TV/anime) ---
+    # Label built from TMDB's last_episode_to_air when it aired recently.
+    if is_tv:
+        last_ep = tmdb_data.get("last_episode") or {}
+        s, e = last_ep.get("season"), last_ep.get("episode")
+        if s and e and _within_days(last_ep.get("air_date"), episode_max_age_days):
+            try:
+                meta.last_episode_label = episode_format.format(s=s, e=e)
+            except (KeyError, IndexError, ValueError):
+                meta.last_episode_label = f"S{s}E{e}"
+
     return meta
 
 
@@ -489,6 +535,11 @@ def pick_sash(
         result = _evaluate_slot(slot, meta)
         if result is not None:
             sash_type = _SASH_TYPES.get(slot, "info")
+            # Anime gets its own palette on the slots that describe the show
+            # itself (episode availability / language identity) rather than
+            # awards or prestige credits.
+            if meta.is_anime and slot in ("new_episode", "foreign"):
+                sash_type = "anime"
             return result, sash_type
     return None
 
@@ -529,6 +580,8 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
         return meta.festival_label if meta.festival_label else None
 
     if slot == "foreign":
+        if meta.is_anime:
+            return "Anime"
         lang = meta.original_language
         if not lang or lang == "en":
             return None
@@ -576,6 +629,9 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
     if slot == "release_status":
         return meta.release_status  # already a display string or None
 
+    if slot == "new_episode":
+        return meta.last_episode_label  # e.g. "S2E5" / "T2E5", or None
+
     return None
 
 
@@ -584,6 +640,7 @@ def _evaluate_slot(slot: str, meta: DiscoveryMeta) -> str | None:
 # ---------------------------------------------------------------------------
 
 ALL_PRIORITY_SLOTS: list[str] = [
+    "new_episode",
     "wins",
     "gg_wins",
     "festival",

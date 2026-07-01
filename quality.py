@@ -55,6 +55,30 @@ def _extract_tokens_from_parsed_file(parsed: dict) -> set[str]:
     return tokens
 
 
+def infer_release_quality(media_type: str, release_status: str | None) -> list[str]:
+    """
+    Conservative release-based quality fallback, used when no quality source
+    is configured or the source returned nothing (common for anime).
+
+    TV/anime: anything that has aired is virtually always available as a
+    WEB 1080p rip (simulcasts for airing anime, streaming rips otherwise).
+    Movies: digital/streaming release → WEB 1080p; physical release → 1080p.
+    In-cinema / unreleased titles get no badge — claiming quality for a CAM
+    would be misleading.
+
+    Returns badge tokens compatible with the regular quality pipeline.
+    """
+    if media_type in ("tv", "series"):
+        if release_status in ("Airing", "Streaming", "Ended", "Cancelled"):
+            return ["WEBDL", "1080P"]
+        return []
+    if release_status == "Streaming":
+        return ["WEBDL", "1080P"]
+    if release_status == "Physical":
+        return ["1080P"]
+    return []
+
+
 def parse_quality(quality_param: str) -> list[str]:
     """Parse a comma-separated quality string into validated tokens."""
     if not quality_param:

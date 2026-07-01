@@ -556,6 +556,7 @@ from quality import (
     fetch_quality_from_aiostreams,
     fetch_quality_from_scraper,
     get_resized_badge,
+    infer_release_quality,
     parse_quality,
     render_badges_left,
 )
@@ -650,6 +651,37 @@ def _rating_retry_key(imdb_id: str, mdblist_key: str) -> tuple[str, str]:
 def _detection_vote_ok(vote_count: int | None) -> bool:
     """True when an asset should be scanned during the foreground request."""
     return vote_count is not None and vote_count <= _cfg.TEXTLESS_DETECTION_MAX_VOTES
+
+
+def _is_anime_title(tmdb_data: dict) -> bool:
+    """Anime = TMDB genre 16 (Animation) + Japanese origin."""
+    return (
+        16 in (tmdb_data.get("genre_ids") or [])
+        and (
+            tmdb_data.get("original_language") == "ja"
+            or "JP" in (tmdb_data.get("origin_country") or [])
+        )
+    )
+
+
+def _anime_adjusted_weights(weights: dict, mal_weight: float, ratings_dict) -> dict:
+    """
+    For anime titles: give MyAnimeList *mal_weight* of the final score and
+    rescale the remaining sources over the leftover share. No-op when the
+    boost is disabled or MAL has no rating for the title.
+    """
+    if mal_weight <= 0 or not isinstance(ratings_dict, dict):
+        return weights
+    if ratings_dict.get("myanimelist") is None:
+        return weights
+    rest = {k: v for k, v in weights.items() if k != "myanimelist"}
+    total = sum(rest.values())
+    if total <= 0:
+        return {**weights, "myanimelist": 1.0}
+    scale = (1.0 - mal_weight) / total
+    out = {k: v * scale for k, v in rest.items()}
+    out["myanimelist"] = mal_weight
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +806,15 @@ class RequestConfig:
     sash_height_ratio: float = 0.12  # diagonal sash height (thickness) as fraction of poster width
     wait_for_quality: bool = False  # block response until quality is fetched (for poster-warm workflows)
     greyscale_no_quality: bool = False  # greyscale art when no quality found (needs wait_for_quality)
+    # Release-based quality fallback: infer a conservative WEB/1080p badge from
+    # release status when the quality source returns nothing (see quality.py).
+    quality_release_fallback: bool = field(default_factory=lambda: _cfg.QUALITY_RELEASE_FALLBACK)
+    # New-episode sash label template ({s}=season, {e}=episode) and recency window.
+    episode_format:       str = field(default_factory=lambda: _cfg.EPISODE_SASH_FORMAT)
+    episode_max_age_days: int = field(default_factory=lambda: _cfg.EPISODE_SASH_MAX_AGE_DAYS)
+    # Anime: share of the weighted score given to MyAnimeList when the title is
+    # detected as anime and MAL has a rating. 0 disables the boost.
+    anime_mal_weight: float = field(default_factory=lambda: _cfg.ANIME_MAL_WEIGHT)
 
 
 def _parse_bool(val: str | None, default: bool) -> bool:
@@ -901,6 +942,14 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.sash_height_ratio       = _f("sash_height_ratio",      cfg.sash_height_ratio,      0.06, 0.20)
     cfg.wait_for_quality        = _b("wait_for_quality",        cfg.wait_for_quality)
     cfg.greyscale_no_quality    = _b("greyscale_no_quality",    cfg.greyscale_no_quality)
+    cfg.quality_release_fallback = _b("quality_release_fallback", cfg.quality_release_fallback)
+    # Episode label template — free text but bounded, must contain both
+    # placeholders to be accepted (e.g. "S{s}E{e}", "T{s}E{e}", "{s}x{e}").
+    _ef_raw = (params.get("episode_format") or "").strip()
+    if 0 < len(_ef_raw) <= 20 and "{s}" in _ef_raw and "{e}" in _ef_raw:
+        cfg.episode_format = _ef_raw
+    cfg.episode_max_age_days    = _i("episode_max_age_days",    cfg.episode_max_age_days, 1, 90)
+    cfg.anime_mal_weight        = _f("anime_mal_weight",        cfg.anime_mal_weight, 0.0, 1.0)
     cfg.score_color_mode        = _i("score_color_mode",       cfg.score_color_mode,       0,   2)
     cfg.badge_display_mode      = _i("badge_display_mode",     cfg.badge_display_mode,     0,   5)
     cfg.rating_display_mode     = _i("rating_display_mode",    cfg.rating_display_mode,    0,   4)
@@ -2621,8 +2670,15 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
     quality_tokens = cached_quality or []
     # Any non-hidden badge mode reads quality_tokens; persisting before quality
     # is cached would lock in an empty/grey badge for the long preset TTL.
+    # When no quality source is configured at all, no fetch will ever arrive —
+    # the render (with or without the release-based fallback badge) is final,
+    # so it's safe to persist.
     wants_badges = rcfg.badge_display_mode != 0
-    quality_missing = wants_badges and cached_quality is None
+    _has_quality_source = (
+        bool(_cfg.AIOSTREAMS_URL and _cfg.AIOSTREAMS_AUTH)
+        or (_cfg.QUALITY_SOURCE == "scraper" and bool(_cfg.SCRAPER_URL))
+    )
+    quality_missing = wants_badges and cached_quality is None and _has_quality_source
 
     try:
         genre_ids, is_textless, logos, release_year, title, poster_path, backdrop_path, tmdb_data = (
@@ -2641,6 +2697,10 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
                 (rcfg.tv_weights or _cfg.TV_WEIGHTS) if type in ("tv", "series")
                 else (rcfg.movie_weights or _cfg.MOVIE_WEIGHTS)
             )
+            if _is_anime_title(tmdb_data):
+                weights = _anime_adjusted_weights(
+                    weights, rcfg.anime_mal_weight, ratings_dict
+                )
             score = (
                 calculate_weighted_score(ratings_dict, weights,
                                          fallback_to_imdb=rcfg.fallback_to_imdb)
@@ -2746,7 +2806,29 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
             is_cult_override=is_cult, is_true_story_override=is_true_story,
             is_metacritic_override=is_metacritic,
             is_digital_release_override=is_digital_release(imdb_id),
+            episode_format=rcfg.episode_format,
+            episode_max_age_days=rcfg.episode_max_age_days,
         )
+
+        # Release-based quality fallback (see /poster path). If no quality
+        # source is configured at all, a real fetch will never arrive — the
+        # inferred badge is final, so it's safe to persist the composite.
+        if (
+            not quality_tokens
+            and rcfg.quality_release_fallback
+            and wants_badges
+        ):
+            _fb_status = await fetch_release_status(
+                client, tmdb_id, effective_tmdb_key, type,
+                tmdb_data.get("tmdb_status"),
+            )
+            _fb_tokens = infer_release_quality(type, _fb_status)
+            if _fb_tokens:
+                quality_tokens = _fb_tokens
+                logger.info(
+                    f"Preset quality fallback for {imdb_id}: status={_fb_status} "
+                    f"→ tokens={quality_tokens}"
+                )
 
         _bp_args = dict(
             logo=logo if (_overlay_logo and logo) else None,
@@ -3591,6 +3673,10 @@ async def get_poster(
                     if type in ("tv", "series")
                     else effective_movie_weights
                 )
+                if _is_anime_title(tmdb_data):
+                    weights = _anime_adjusted_weights(
+                        weights, rcfg.anime_mal_weight, ratings_dict
+                    )
                 score = calculate_weighted_score(
                     ratings_dict,
                     weights,
@@ -3694,7 +3780,34 @@ async def get_poster(
             is_metacritic_override=is_metacritic,
             is_digital_release_override=is_digital_release(imdb_id),
             release_status_override=_release_status,
+            episode_format=rcfg.episode_format,
+            episode_max_age_days=rcfg.episode_max_age_days,
         )
+
+        # ------------------------------------------------------------------
+        # Release-based quality fallback — when the quality source returned
+        # nothing (or none is configured), infer a conservative badge from
+        # the release status. Never written to the quality cache, so a real
+        # fetch still replaces it once available.
+        # ------------------------------------------------------------------
+        quality_fallback_used = False
+        if (
+            not quality_tokens
+            and rcfg.quality_release_fallback
+            and rcfg.badge_display_mode in (1, 2, 4, 5)
+        ):
+            _fb_status = await fetch_release_status(
+                client, tmdb_id, effective_tmdb_key, type,
+                tmdb_data.get("tmdb_status"),
+            )
+            _fb_tokens = infer_release_quality(type, _fb_status)
+            if _fb_tokens:
+                quality_tokens = _fb_tokens
+                quality_fallback_used = True
+                logger.info(
+                    f"Quality fallback for {imdb_id}: status={_fb_status} "
+                    f"→ tokens={quality_tokens}"
+                )
 
         # ------------------------------------------------------------------
         # Debug mode: return diagnostic JSON instead of rendering the poster.
@@ -3728,6 +3841,10 @@ async def get_poster(
                 "matched_directors": discovery_meta.matched_directors,
                 "matched_cast":      discovery_meta.matched_cast,
                 "release_status":    discovery_meta.release_status,
+                "is_anime":          discovery_meta.is_anime,
+                "last_episode":      tmdb_data.get("last_episode") or None,
+                "last_episode_label": discovery_meta.last_episode_label,
+                "quality_fallback_used": quality_fallback_used,
                 "sash_priority":     rcfg.sash_priority,
                 "badge_display_mode":rcfg.badge_display_mode,
                 "rating_display_mode":rcfg.rating_display_mode,
