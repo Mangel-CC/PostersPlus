@@ -25,7 +25,8 @@ services:
       # the languages/ folder baked into the image — if the host dir is empty
       # the app will see no language files, so seed it once from the repo:
       #   cp languages/* /data/coolify/services/b7zs4tkc6r81coi2irnt7vkc/postersplus-languages/
-      - /data/coolify/services/b7zs4tkc6r81coi2irnt7vkc/postersplus-languages:/app/languages
+      - /data/coolify/applications/rqexp1497x00eevvotwkylgz/postersplus-languages:/app/l
+  anguages
     env_file:
       - .env # see this file for an explanation of what each flag does
     environment: 
