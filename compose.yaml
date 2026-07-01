@@ -9,8 +9,8 @@ services:
         # model once at runtime instead.
         BAKE_PPOCR_MODEL: "${BAKE_PPOCR_MODEL:-true}"
     image: postersplus
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     restart: unless-stopped
     volumes:
       # Named volume (not a host bind) so a fresh `compose up` works with the
