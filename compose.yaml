@@ -20,7 +20,10 @@ services:
       # cache DB, TMDB posters/logos, and composites.
       # To supply discovery_overrides.json, copy it in after first start:
       #   docker compose cp ./discovery_overrides.json postersplus:/app/cache/
-      - postersplus-cache:/app/cache
+      # Coolify persistent storage (host bind). Note: the image runs as the
+      # non-root uid 568 — make sure the host dir is writable by it, e.g.
+      #   chown -R 568:568 /data/coolify/services/b7zs4tkc6r81coi2irnt7vkc/postersplus-languages
+      - /data/coolify/services/b7zs4tkc6r81coi2irnt7vkc/postersplus-languages:/app/cache
     env_file:
       - .env # see this file for an explanation of what each flag does
     environment: 
@@ -63,6 +66,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-
-volumes:
-  postersplus-cache:
