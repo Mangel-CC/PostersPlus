@@ -1210,6 +1210,7 @@ async def fetch_release_status(
                     if _regional:
                         results = _regional
                 has_physical = has_digital = has_theatrical = False
+                most_recent_theatrical_date = None
                 for entry in results:
                     for rd in entry.get("release_dates", []):
                         rtype = rd.get("type")
@@ -1226,13 +1227,27 @@ async def fetch_release_status(
                             has_digital = True
                         elif rtype == 3:
                             has_theatrical = True
+                            if most_recent_theatrical_date is None or rdate > most_recent_theatrical_date:
+                                most_recent_theatrical_date = rdate
 
                 if has_physical:
                     result = "Physical"
                 elif has_digital:
                     result = "Streaming"
                 elif has_theatrical:
-                    result = "Cinema"
+                    # If only theatrical release is available, check if it's very old.
+                    # Old theatrical-only movies likely have incomplete TMDB data
+                    # (missing digital/physical releases), so assume "Streaming".
+                    if most_recent_theatrical_date is not None:
+                        days_since_theatrical = (today - most_recent_theatrical_date).days
+                        # 180 days threshold: if theatrical release was >6 months ago
+                        # and no digital/physical records exist, assume it's on streaming
+                        if days_since_theatrical > 180:
+                            result = "Streaming"
+                        else:
+                            result = "Cinema"
+                    else:
+                        result = "Cinema"
                 elif tmdb_status == "Released":
                     # Released per TMDB but no release date records found —
                     # incomplete TMDB data rather than genuinely unreleased.
