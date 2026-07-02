@@ -3,7 +3,7 @@ import asyncio
 import colorsys
 import io
 import logging
-from datetime import date as _date
+from datetime import date as _date, timedelta as _timedelta
 import httpx
 import numpy as np
 
@@ -429,6 +429,42 @@ async def fetch_poster_metadata(
             "episode":  _last_ep_raw.get("episode_number"),
             "air_date": _last_ep_raw.get("air_date"),
         }
+
+    # Premiere-day lag: on the day an episode airs, TMDB often still lists it in
+    # next_episode_to_air and hasn't moved it into last_episode_to_air yet — so a
+    # just-premiered show (or a new-season opener) would otherwise show no
+    # new-episode sash on the very day it's most relevant.
+    #
+    # TMDB stores ONE global air_date per episode (not regionalised like movie
+    # release_dates) — for anime this is the Japan broadcast date. Japan runs
+    # ~15h ahead of the Americas, so an episode TMDB dates "tomorrow" is already
+    # simulcast-available to viewers here today. We therefore treat a next
+    # episode airing today OR tomorrow (per the TMDB/Japan date) as already out,
+    # and stamp its effective air_date no later than today so the recency gate
+    # (_within_days) fires. Only a 1-day look-ahead — never further — so the sash
+    # still means "this episode is out (somewhere you can watch it)".
+    _next_ep_raw = data.get("next_episode_to_air") or {}
+    if _next_ep_raw.get("season_number") and _next_ep_raw.get("episode_number"):
+        _next_air = (_next_ep_raw.get("air_date") or "")[:10]
+        try:
+            _next_date = _date.fromisoformat(_next_air)
+        except (ValueError, TypeError):
+            _next_date = None
+        if _next_date is not None and _next_date <= local_today() + _timedelta(days=1):
+            _ns = int(_next_ep_raw.get("season_number"))
+            _ne = int(_next_ep_raw.get("episode_number"))
+            _ls = int(last_episode.get("season") or 0)
+            _le = int(last_episode.get("episode") or 0)
+            # Newer = later season, or same season with a later episode number.
+            if (_ns, _ne) > (_ls, _le):
+                # Clamp to today: a Japan-dated "tomorrow" episode is out here now,
+                # so recency should measure from today, not the future TMDB date.
+                _eff_air = min(_next_date, local_today()).isoformat()
+                last_episode = {
+                    "season":   _ns,
+                    "episode":  _ne,
+                    "air_date": _eff_air,
+                }
 
     # Origin country — used with genre 16 (Animation) + original_language "ja"
     # for anime detection. TMDB returns it for both movies and TV.
