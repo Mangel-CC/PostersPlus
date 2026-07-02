@@ -73,6 +73,9 @@ def local_today() -> "date":
     except Exception:
         return date.today()
 SERVER_TMDB_KEY       = os.environ.get("TMDB_API_KEY", "").strip()
+# fanart.tv personal API key — enables the fanart.tv logo fallback (free key
+# from https://fanart.tv/get-an-api-key/). Empty = fallback disabled.
+FANART_API_KEY        = os.environ.get("FANART_API_KEY", "").strip()
 SERVER_MDBLIST_KEY    = os.environ.get("MDBLIST_API_KEY", "").strip()
 SERVER_MDBLIST_KEY_2  = os.environ.get("MDBLIST_API_KEY_2", "").strip()
 

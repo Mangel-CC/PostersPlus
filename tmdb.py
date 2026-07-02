@@ -919,6 +919,109 @@ def _crop_and_normalise_backdrop(image: Image.Image, tmdb_id: str,
     return normalise_poster(image)
 
 
+from config import FANART_API_KEY
+
+# ---------------------------------------------------------------------------
+# fanart.tv logo fallback
+# ---------------------------------------------------------------------------
+# Segunda fuente de logos cuando TMDB no tiene candidatos en los idiomas
+# pedidos: fanart.tv tiene logos curados CON etiqueta de idioma (a diferencia
+# de Metahub), asi que respeta el mismo orden de idiomas del caller. Requiere
+# FANART_API_KEY (gratis). Para TV, fanart.tv se indexa por TheTVDB id, que se
+# resuelve via TMDB /external_ids. Lookups cacheados en memoria 6h; el PNG
+# elegido se cachea en el mismo blob-cache que los logos de TMDB.
+
+_FANART_LOOKUP_TTL = 6 * 3600
+_fanart_lookup_cache: dict = {}
+
+
+async def _fetch_fanart_logo(
+    client: httpx.AsyncClient,
+    media_type: str,
+    tmdb_id: str | None,
+    tmdb_key: str | None,
+    languages: list,
+) -> Image.Image | None:
+    if not FANART_API_KEY or not tmdb_id:
+        return None
+    import time as _time
+    # fanart.tv usa "00" para logos sin idioma; mapea el bucket neutral (None).
+    langs = ["00" if lang in (None, "") else str(lang) for lang in languages]
+    ck = (media_type, str(tmdb_id), tuple(langs))
+    now = _time.time()
+    hit = _fanart_lookup_cache.get(ck)
+    best_url = None
+    if hit and now - hit[0] < _FANART_LOOKUP_TTL:
+        best_url = hit[1]
+        if best_url is None:
+            return None
+    if best_url is None:
+        try:
+            if media_type in ("tv", "series"):
+                ext = await client.get(
+                    f"https://api.themoviedb.org/3/tv/{tmdb_id}/external_ids",
+                    params={"api_key": tmdb_key or ""},
+                )
+                ext.raise_for_status()
+                tvdb_id = (ext.json() or {}).get("tvdb_id")
+                if not tvdb_id:
+                    _fanart_lookup_cache[ck] = (now, None)
+                    return None
+                resp = await client.get(
+                    f"https://webservice.fanart.tv/v3/tv/{tvdb_id}",
+                    params={"api_key": FANART_API_KEY},
+                )
+                fields = ("hdtvlogo", "clearlogo")
+            else:
+                resp = await client.get(
+                    f"https://webservice.fanart.tv/v3/movies/{tmdb_id}",
+                    params={"api_key": FANART_API_KEY},
+                )
+                fields = ("hdmovielogo", "movielogo")
+            if resp.status_code == 404:
+                _fanart_lookup_cache[ck] = (now, None)
+                return None
+            resp.raise_for_status()
+            data = resp.json() or {}
+            entries = []
+            for field in fields:
+                entries.extend(data.get(field) or [])
+            best = None
+            for lang in langs:
+                bucket = [e for e in entries if (e.get("lang") or "00") == lang]
+                if bucket:
+                    best = max(bucket, key=lambda e: int(e.get("likes") or 0))
+                    break
+            best_url = best.get("url") if best else None
+            _fanart_lookup_cache[ck] = (now, best_url)
+            if not best_url:
+                return None
+        except Exception as exc:
+            logger.warning(f"fanart.tv logo lookup failed for {media_type}/{tmdb_id}: {exc}")
+            return None
+
+    cache_key = "fanart_" + best_url.rsplit("/", 1)[-1]
+    cached_bytes = get_cached_tmdb_logo(cache_key)
+    if cached_bytes:
+        logger.info("fanart.tv logo cache hit")
+        return Image.open(io.BytesIO(cached_bytes)).convert("RGBA")
+    try:
+        logger.info("External API Call: Requested logo from fanart.tv")
+        r = await client.get(best_url, follow_redirects=True)
+        r.raise_for_status()
+        logo = Image.open(io.BytesIO(r.content)).convert("RGBA")
+    except Exception as exc:
+        logger.warning(f"fanart.tv logo download failed: {exc}")
+        return None
+    bbox = logo.getchannel("A").getbbox()
+    if bbox:
+        logo = logo.crop(bbox)
+    buf = io.BytesIO()
+    logo.save(buf, format="PNG")
+    set_cached_tmdb_logo(cache_key, buf.getvalue())
+    return logo
+
+
 async def _fetch_metahub_logo(
     client: httpx.AsyncClient,
     imdb_id: str,
@@ -1009,6 +1112,7 @@ async def fetch_logo(
     original_language: str | None = None,
     logo_priority: str = "native_original",
     language_order: list[str | None] | None = None,
+    fanart_ctx: dict | None = None,
 ) -> Image.Image | None:
     """
     Fetch the best available logo for a title, with a Metahub CDN fallback.
@@ -1082,7 +1186,18 @@ async def fetch_logo(
     )
 
     if not candidates:
-        # No TMDB logo at all — try Metahub before giving up
+        # No TMDB logo in the requested buckets — try fanart.tv (language-aware),
+        # then Metahub, before giving up.
+        if fanart_ctx:
+            fanart_logo = await _fetch_fanart_logo(
+                client,
+                fanart_ctx.get("media_type", "movie"),
+                fanart_ctx.get("tmdb_id"),
+                fanart_ctx.get("tmdb_key"),
+                fanart_ctx.get("languages") or (language_order or ["en"]),
+            )
+            if fanart_logo is not None:
+                return fanart_logo
         if imdb_id:
             return await _fetch_metahub_logo(client, imdb_id)
         return None

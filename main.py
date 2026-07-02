@@ -2735,6 +2735,12 @@ async def get_logo(
         client, logos, logo_language,
         imdb_id or None, original_language,
         language_order=order,
+        fanart_ctx={
+            "media_type": type,
+            "tmdb_id": tmdb_id,
+            "tmdb_key": _resolve_tmdb_key(tmdb_key),
+            "languages": order,
+        },
     )
     if logo is not None:
         try:
@@ -2994,6 +3000,12 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
                 imdb_id=imdb_id, original_language=tmdb_data.get("original_language"),
                 logo_priority=rcfg.logo_priority,
                 language_order=_artwork_logo_order(tmdb_data, rcfg.logo_language),
+                fanart_ctx={
+                    "media_type": type,
+                    "tmdb_id": tmdb_id,
+                    "tmdb_key": effective_tmdb_key,
+                    "languages": _artwork_logo_order(tmdb_data, rcfg.logo_language),
+                },
             ) if _overlay_logo else _resolved(None),
             fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type),
         )
@@ -3737,7 +3749,7 @@ async def get_poster(
             trending_rank,
         ) = await asyncio.gather(
             _image_coro,
-            fetch_logo(client, logos, rcfg.logo_language, imdb_id=imdb_id, original_language=tmdb_data.get("original_language"), logo_priority=rcfg.logo_priority, language_order=_artwork_logo_order(tmdb_data, rcfg.logo_language)) if (is_textless and not is_no_poster) else _resolved(None),
+            fetch_logo(client, logos, rcfg.logo_language, imdb_id=imdb_id, original_language=tmdb_data.get("original_language"), logo_priority=rcfg.logo_priority, language_order=_artwork_logo_order(tmdb_data, rcfg.logo_language), fanart_ctx={"media_type": type, "tmdb_id": tmdb_id, "tmdb_key": effective_tmdb_key, "languages": _artwork_logo_order(tmdb_data, rcfg.logo_language)}) if (is_textless and not is_no_poster) else _resolved(None),
             rating_coro,
             fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type),
         )
