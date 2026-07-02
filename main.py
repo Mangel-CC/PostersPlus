@@ -2836,7 +2836,6 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
             _fb_status = await fetch_release_status(
                 client, tmdb_id, effective_tmdb_key, type,
                 tmdb_data.get("tmdb_status"),
-                region=rcfg.region,
             )
             _fb_tokens = infer_release_quality(type, _fb_status)
             if _fb_tokens:
@@ -3775,7 +3774,6 @@ async def get_poster(
             _release_status = await fetch_release_status(
                 client, tmdb_id, effective_tmdb_key, type,
                 tmdb_data.get("tmdb_status"),
-                region=rcfg.region,
             )
             # r/movieleaks confirmation overrides TMDB's theatrical/production
             # status — if the film is in the digital-release cache it's already
@@ -3824,7 +3822,6 @@ async def get_poster(
             _fb_status = await fetch_release_status(
                 client, tmdb_id, effective_tmdb_key, type,
                 tmdb_data.get("tmdb_status"),
-                region=rcfg.region,
             )
             _fb_tokens = infer_release_quality(type, _fb_status)
             if _fb_tokens:
