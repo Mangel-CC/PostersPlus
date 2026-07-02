@@ -1233,55 +1233,72 @@ async def fetch_release_status(
                 )
                 resp.raise_for_status()
                 today = local_today()
-                results = resp.json().get("results", [])
+                all_results = resp.json().get("results", [])
                 # Region scoping: if the viewer's region has dated entries,
                 # judge availability by those alone; otherwise use all regions
                 # (old behaviour) so obscure titles still resolve.
+                results = all_results
                 if region:
                     _regional = [
-                        entry for entry in results
+                        entry for entry in all_results
                         if (entry.get("iso_3166_1") or "").upper() == region
                         and entry.get("release_dates")
                     ]
                     if _regional:
                         results = _regional
-                has_physical = has_digital = has_theatrical = False
-                most_recent_theatrical_date = None
-                for entry in results:
-                    for rd in entry.get("release_dates", []):
-                        rtype = rd.get("type")
-                        date_str = (rd.get("release_date") or "")[:10]
-                        try:
-                            rdate = _date.fromisoformat(date_str)
-                        except (ValueError, TypeError):
-                            continue
-                        if rdate > today:
-                            continue
-                        if rtype == 5:
-                            has_physical = True
-                        elif rtype in (4, 6):   # digital or TV broadcast
-                            has_digital = True
-                        elif rtype == 3:
-                            has_theatrical = True
-                            if most_recent_theatrical_date is None or rdate > most_recent_theatrical_date:
-                                most_recent_theatrical_date = rdate
+
+                def _scan_release_types(entries):
+                    """Return (has_physical, has_digital, has_theatrical, latest_theatrical)
+                    for already-released (date <= today) entries in *entries*."""
+                    phys = dig = theat = False
+                    latest_theat = None
+                    for entry in entries:
+                        for rd in entry.get("release_dates", []):
+                            rtype = rd.get("type")
+                            date_str = (rd.get("release_date") or "")[:10]
+                            try:
+                                rdate = _date.fromisoformat(date_str)
+                            except (ValueError, TypeError):
+                                continue
+                            if rdate > today:
+                                continue
+                            if rtype == 5:
+                                phys = True
+                            elif rtype in (4, 6):   # digital or TV broadcast
+                                dig = True
+                            elif rtype == 3:
+                                theat = True
+                                if latest_theat is None or rdate > latest_theat:
+                                    latest_theat = rdate
+                    return phys, dig, theat, latest_theat
+
+                has_physical, has_digital, has_theatrical, most_recent_theatrical_date = \
+                    _scan_release_types(results)
 
                 if has_physical:
                     result = "Physical"
                 elif has_digital:
                     result = "Streaming"
                 elif has_theatrical:
-                    # If only theatrical release is available, check if it's very old.
-                    # Old theatrical-only movies likely have incomplete TMDB data
-                    # (missing digital/physical releases), so assume "Streaming".
-                    if most_recent_theatrical_date is not None:
-                        days_since_theatrical = (today - most_recent_theatrical_date).days
-                        # 180 days threshold: if theatrical release was >6 months ago
-                        # and no digital/physical records exist, assume it's on streaming
-                        if days_since_theatrical > 180:
-                            result = "Streaming"
-                        else:
-                            result = "Cinema"
+                    # The (region-scoped) data shows only a theatrical date. TMDB
+                    # frequently records ONLY the theatrical release for many
+                    # regions (e.g. MX) even for old catalogue films that have
+                    # long been on digital/physical elsewhere — which would
+                    # mis-flag them as "Cinema" (and grey them out). Before
+                    # concluding that, consult the GLOBAL release dates: if the
+                    # film is already on digital or physical in ANY region, it's
+                    # available — TMDB just lacks the regional digital record.
+                    g_phys, g_dig, _, _ = _scan_release_types(all_results)
+                    if g_phys:
+                        result = "Physical"
+                    elif g_dig:
+                        result = "Streaming"
+                    elif (most_recent_theatrical_date is not None
+                          and (today - most_recent_theatrical_date).days > 180):
+                        # No digital/physical anywhere, but the theatrical run was
+                        # >6 months ago: incomplete TMDB data rather than a film
+                        # still in cinemas — assume streaming.
+                        result = "Streaming"
                     else:
                         result = "Cinema"
                 elif tmdb_status == "Released":
