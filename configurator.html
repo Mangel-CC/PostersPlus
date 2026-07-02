@@ -1280,14 +1280,19 @@
 
   /* URL display box — shown instead of clipboard copy on LAN IPs */
   #url-display-row { margin-top: 6px; display: none; }
-  #url-display-input {
+  #url-display-input, .artwork-url-input {
     width: 100%; box-sizing: border-box;
     font-size: 9px; font-family: monospace;
     color: var(--silver-dim); background: var(--black);
     border: 1px solid var(--border);
     padding: 5px 8px; cursor: text;
   }
-  #url-display-input:focus { outline: none; border-color: var(--gold-dim); color: var(--text-primary); }
+  #url-display-input:focus, .artwork-url-input:focus { outline: none; border-color: var(--gold-dim); color: var(--text-primary); }
+  #artwork-url-rows { margin-top: 6px; }
+  .artwork-url-label {
+    display: block; font-size: 8px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--silver-dim); margin: 5px 0 2px;
+  }
 
 
   /* ── LOG LINE ── */
@@ -2945,6 +2950,17 @@ try{if(localStorage.getItem('postersplus_theme')==='light')document.documentElem
                    onclick="this.select()"
                    title="Click to select all, then Ctrl+C to copy">
           </div>
+          <!-- Standalone artwork endpoints — URL patterns for AIOMetadata (logo/background) -->
+          <div id="artwork-url-rows">
+            <label class="artwork-url-label" for="logo-url-input">Logo URL pattern</label>
+            <input type="text" id="logo-url-input" class="artwork-url-input" readonly
+                   onclick="this.select()"
+                   title="Click to select all, then Ctrl+C to copy — AIOMetadata Logo URL Pattern">
+            <label class="artwork-url-label" for="background-url-input">Background URL pattern</label>
+            <input type="text" id="background-url-input" class="artwork-url-input" readonly
+                   onclick="this.select()"
+                   title="Click to select all, then Ctrl+C to copy — AIOMetadata Background URL Pattern">
+          </div>
           <div class="preview-console">
             <div class="log-line" id="preview-log">ready.</div>
           </div>
@@ -3918,11 +3934,28 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// URL patterns de los endpoints /logo y /background (placeholders para AIOMetadata).
+function buildArtworkTemplateUrls() {
+  const domain = (vEl('cfg-domain') || window.location.origin).replace(/\/$/, '') || 'https://your-instance.com';
+  const accKey = vEl('cfg-access-key');
+  const logoLanguage = vEl('cfg-language') || 'en';
+  const base = `tmdb_id={tmdb_id}&imdb_id={imdb_id}&type={type}` + (accKey ? `&access_key=${accKey}` : '');
+  return {
+    logo: `${domain}/logo?${base}&logo_language=${logoLanguage}`,
+    background: `${domain}/background?${base}&size=w1280`,
+  };
+}
+
 function build() {
   const url = buildPreviewUrl();
   if (_SHOW_URL_BOX) {
     document.getElementById('url-display-input').value = buildTemplateUrl();
   }
+  const _art = buildArtworkTemplateUrls();
+  const _logoEl = document.getElementById('logo-url-input');
+  const _bgEl   = document.getElementById('background-url-input');
+  if (_logoEl) _logoEl.value = _art.logo;
+  if (_bgEl)   _bgEl.value   = _art.background;
   saveSettings();
   return url;
 }
