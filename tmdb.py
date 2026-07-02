@@ -1008,6 +1008,7 @@ async def fetch_logo(
     imdb_id: str | None = None,
     original_language: str | None = None,
     logo_priority: str = "native_original",
+    language_order: list[str | None] | None = None,
 ) -> Image.Image | None:
     """
     Fetch the best available logo for a title, with a Metahub CDN fallback.
@@ -1041,21 +1042,38 @@ async def fetch_logo(
     _exts = (".png", ".svg") if _HAS_CAIROSVG else (".png",)
     _cand = [lg for lg in logos if lg["file_path"].lower().endswith(_exts)]
 
-    language_buckets = {
-        language: [lg for lg in _cand if lg.get("iso_639_1") == language]
-        for language in image_language_order(
-            logo_language, original_language, logo_priority
-        )
-    }
     neutral   = [lg for lg in _cand if lg.get("iso_639_1") in (None, "")]
     english   = [lg for lg in _cand if lg.get("iso_639_1") == "en"]
 
     candidates = []
-    for language in language_buckets:
-        if language_buckets[language]:
-            candidates = language_buckets[language]
-            break
-    candidates = candidates or neutral or english
+    if language_order is not None:
+        # Explicit bucket order (used by the standalone /logo endpoint): each entry
+        # is a language code, or None for the language-neutral bucket. No implicit
+        # neutral/english fallback beyond what the caller lists.
+        _seen: set = set()
+        for language in language_order:
+            if language in _seen:
+                continue
+            _seen.add(language)
+            bucket = (
+                neutral if language in (None, "")
+                else [lg for lg in _cand if lg.get("iso_639_1") == language]
+            )
+            if bucket:
+                candidates = bucket
+                break
+    else:
+        language_buckets = {
+            language: [lg for lg in _cand if lg.get("iso_639_1") == language]
+            for language in image_language_order(
+                logo_language, original_language, logo_priority
+            )
+        }
+        for language in language_buckets:
+            if language_buckets[language]:
+                candidates = language_buckets[language]
+                break
+        candidates = candidates or neutral or english
 
     candidates = sorted(
         candidates,

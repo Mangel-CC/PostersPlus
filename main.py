@@ -561,7 +561,7 @@ from quality import (
     render_badges_left,
 )
 from ratings import calculate_weighted_score, draw_score_bar, fetch_rating, draw_score_bar_vertical, _draw_solid_pip, draw_frosted_bar, _score_color, _score_color_alt, _score_color_metal
-from tmdb import composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
+from tmdb import ensure_light_logo, composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
 from presets import get_preset, preset_names, preset_catalog
 
 # ---------------------------------------------------------------------------
@@ -2594,6 +2594,175 @@ async def resolve_imdb(
         raise HTTPException(status_code=503, detail="Service unavailable")
     resp = await _HTTP_CLIENT.get(endpoint, params={"api_key": effective_key})
     return Response(content=resp.content, media_type="application/json", status_code=resp.status_code)
+
+
+# ---------------------------------------------------------------------------
+# /logo & /background — standalone artwork endpoints
+# ---------------------------------------------------------------------------
+# Lets catalog addons (e.g. Nuvio) delegate ALL artwork to PostersPlus instead
+# of talking to TMDB themselves.
+#
+#   /logo — transparent PNG of the best title logo. Language priority:
+#     default: logo_language (es = latino) -> original language -> neutral ->
+#              rendered text title (never 404s: something always comes back)
+#     anime:   en (romaji/english logos share the "en" tag on TMDB) ->
+#              logo_language -> ja -> neutral -> rendered text title
+#   /background — 302 to the best language-neutral (textless) TMDB backdrop,
+#     falling back to the text-bearing one; 404 when TMDB has none at all.
+#
+# Both accept tmdb_id and/or imdb_id (imdb resolved internally) and reuse the
+# poster pipeline's TMDB metadata cache, so a poster+logo+background trio for
+# one title costs a single TMDB round-trip.
+
+_ARTWORK_CACHE_HEADERS      = {"Cache-Control": "public, max-age=86400"}
+_ARTWORK_TEXT_CACHE_HEADERS = {"Cache-Control": "public, max-age=3600"}
+
+
+def _render_text_logo(title: str) -> bytes:
+    """Transparent PNG with the title rendered as text — last-resort 'logo'."""
+    W, H = 1000, 400
+    canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    words = (title or "").split() or ["?"]
+
+    def _wrap(font):
+        lines: list[str] = []
+        current: list[str] = []
+        for word in words:
+            cand = " ".join(current + [word])
+            if draw.textlength(cand, font=font) <= W * 0.94 or not current:
+                current.append(word)
+            else:
+                lines.append(" ".join(current))
+                current = [word]
+        if current:
+            lines.append(" ".join(current))
+        return lines
+
+    font = None
+    lines = [title or "?"]
+    font_size = 40
+    for fs in range(160, 39, -8):
+        try:
+            f = ImageFont.truetype(os.path.join(_FONTS_DIR, "Inter-Bold.ttf"), fs)
+        except IOError:
+            break
+        ls = _wrap(f)
+        if len(ls) <= 2 and int(fs * 1.2) * len(ls) <= H * 0.9:
+            font, lines, font_size = f, ls, fs
+            break
+    if font is None:
+        font = ImageFont.load_default()
+        lines = _wrap(font)
+    line_h = int(font_size * 1.2)
+    top = max(0, (H - line_h * len(lines)) // 2)
+    shadow = max(2, int(font_size * 0.05))
+    for i, line in enumerate(lines):
+        w = draw.textlength(line, font=font)
+        x, y = int((W - w) // 2), top + i * line_h
+        draw.text((x + shadow, y + shadow), line, font=font, fill=(0, 0, 0, 160))
+        draw.text((x, y), line, font=font, fill=(245, 245, 245, 255))
+    bbox = canvas.getchannel("A").getbbox()
+    if bbox:
+        pad = 8
+        canvas = canvas.crop((
+            max(0, bbox[0] - pad), max(0, bbox[1] - pad),
+            min(W, bbox[2] + pad), min(H, bbox[3] + pad),
+        ))
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+async def _artwork_metadata(
+    tmdb_id: str, imdb_id: str, type: str,
+    tmdb_key: str, access_key: str, logo_language: str,
+):
+    """Shared plumbing for /logo & /background: gate, validate, resolve, fetch."""
+    _gate_anonymous_tmdb_proxy(access_key)
+    await _anonymous_tmdb_rate_limit(tmdb_key, access_key)
+    if type == "series":
+        type = "tv"
+    _check_type(type)
+    if not tmdb_id and not imdb_id:
+        raise HTTPException(status_code=422, detail="tmdb_id or imdb_id required")
+    if tmdb_id:
+        _check_tmdb_id(tmdb_id)
+    if imdb_id:
+        _check_imdb_id(imdb_id)
+    effective_key = _resolve_tmdb_key(tmdb_key)
+    if not effective_key:
+        raise HTTPException(status_code=400, detail="No TMDB API key available")
+    if _HTTP_CLIENT is None:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    client = _HTTP_CLIENT
+    if not tmdb_id:
+        tmdb_id = await resolve_imdb_to_tmdb(client, imdb_id, effective_key, type)
+        if not tmdb_id:
+            raise HTTPException(status_code=404, detail="Title not found on TMDB")
+    meta = await fetch_poster_metadata(client, str(tmdb_id), effective_key, type, logo_language)
+    return client, type, str(tmdb_id), meta
+
+
+@app.get("/logo")
+async def get_logo(
+    tmdb_id: str = "",
+    imdb_id: str = "",
+    type: str = "movie",
+    logo_language: str = "es",
+    access_key: str = "",
+    tmdb_key: str = "",
+):
+    client, type, tmdb_id, meta = await _artwork_metadata(
+        tmdb_id, imdb_id, type, tmdb_key, access_key, logo_language
+    )
+    (_genres, _tl, logos, _yr, title, _pp, _bp, tmdb_data) = meta
+    original_language = tmdb_data.get("original_language")
+    if _is_anime_title(tmdb_data):
+        # Romaji/english logos share TMDB's "en" tag; then latino, then japanese.
+        order: list = ["en", logo_language, "ja", None]
+    else:
+        order = [logo_language, original_language, None]
+    logo = await fetch_logo(
+        client, logos, logo_language,
+        imdb_id or None, original_language,
+        language_order=order,
+    )
+    if logo is not None:
+        try:
+            logo = ensure_light_logo(logo)
+        except Exception:
+            pass
+        buf = io.BytesIO()
+        logo.save(buf, format="PNG")
+        return Response(content=buf.getvalue(), media_type="image/png",
+                        headers=_ARTWORK_CACHE_HEADERS)
+    # Text fallback — shorter TTL so a logo added to TMDB later gets picked up.
+    return Response(content=_render_text_logo(title), media_type="image/png",
+                    headers=_ARTWORK_TEXT_CACHE_HEADERS)
+
+
+@app.get("/background")
+async def get_background(
+    tmdb_id: str = "",
+    imdb_id: str = "",
+    type: str = "movie",
+    size: str = "w1280",
+    access_key: str = "",
+    tmdb_key: str = "",
+):
+    client, type, tmdb_id, meta = await _artwork_metadata(
+        tmdb_id, imdb_id, type, tmdb_key, access_key, "en"
+    )
+    (_genres, _tl, _logos, _yr, _title, _pp, backdrop_path, tmdb_data) = meta
+    path = backdrop_path or tmdb_data.get("text_backdrop_path")
+    if not path:
+        raise HTTPException(status_code=404, detail="No backdrop on TMDB")
+    if size not in ("w780", "w1280", "original"):
+        size = "w1280"
+    headers = dict(_ARTWORK_CACHE_HEADERS)
+    headers["Location"] = f"https://image.tmdb.org/t/p/{size}{path}"
+    return Response(status_code=302, headers=headers)
 
 
 # ---------------------------------------------------------------------------
