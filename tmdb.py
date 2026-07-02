@@ -62,6 +62,7 @@ from config import (
     DEBUG_LOGO_SIZING,
     TMDB_POSTER_MIN_VOTES,
     TMDB_POSTER_MAX_SCORE_DROP,
+    local_today,
 )
 
 
@@ -1124,6 +1125,7 @@ async def fetch_release_status(
     tmdb_key: str,
     media_type: str,
     tmdb_status: str | None,
+    region: str | None = None,
 ) -> str | None:
     """
     Determine the current release status for the info sash.
@@ -1138,8 +1140,17 @@ async def fetch_release_status(
 
     Returns one of: "Physical" | "Streaming" | "Cinema" | "Production" |
                     "Returning" | "Ended" | "Cancelled" | None.
+
+    When *region* is set (ISO 3166-1, e.g. "MX") and TMDB has release dates
+    for that country, only those dates are considered — so a film already on
+    digital in the viewer's region isn't reported as "Cinema" because of a
+    later US date (or vice versa). Falls back to all-region dates when the
+    region has none. "Today" is evaluated in the configured RELEASE_TZ.
     """
-    cache_key = f"{media_type}_{tmdb_id}"
+    region = (region or "").strip().upper() or None
+    cache_key = (
+        f"{media_type}_{tmdb_id}_{region}" if region else f"{media_type}_{tmdb_id}"
+    )
     cached = get_cached_release_status(cache_key)
     if cached:
         return cached
@@ -1185,9 +1196,21 @@ async def fetch_release_status(
                     params={"api_key": tmdb_key},
                 )
                 resp.raise_for_status()
-                today = _date.today()
+                today = local_today()
+                results = resp.json().get("results", [])
+                # Region scoping: if the viewer's region has dated entries,
+                # judge availability by those alone; otherwise use all regions
+                # (old behaviour) so obscure titles still resolve.
+                if region:
+                    _regional = [
+                        entry for entry in results
+                        if (entry.get("iso_3166_1") or "").upper() == region
+                        and entry.get("release_dates")
+                    ]
+                    if _regional:
+                        results = _regional
                 has_physical = has_digital = has_theatrical = False
-                for entry in resp.json().get("results", []):
+                for entry in results:
                     for rd in entry.get("release_dates", []):
                         rtype = rd.get("type")
                         date_str = (rd.get("release_date") or "")[:10]

@@ -67,6 +67,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from config import SASH_PRIORITY as DEFAULT_SASH_PRIORITY  # single source of truth
+from config import local_today
 
 logger = logging.getLogger(__name__)
 
@@ -293,24 +294,30 @@ ANIMATION_GENRE_ID = 16
 
 
 def _within_days(date_str: str | None, max_days: int) -> bool:
-    """True if *date_str* (YYYY-MM-DD) is within *max_days* of today (not future)."""
+    """True if *date_str* (YYYY-MM-DD) is within *max_days* of today (not future).
+
+    "Today" is evaluated in the configured RELEASE_TZ (config.local_today) so
+    a UTC server doesn't consider a same-day episode "future" for viewers in
+    timezones behind UTC."""
     if not date_str:
         return False
     try:
         d = datetime.strptime(date_str, "%Y-%m-%d").date()
-        delta = (date.today() - d).days
+        delta = (local_today() - d).days
         return 0 <= delta <= max_days
     except ValueError:
         return False
 
 
 def _is_recent(release_date: str | None) -> bool:
-    """Return True if *release_date* (YYYY-MM-DD) is within NEW_RELEASE_DAYS of today."""
+    """Return True if *release_date* (YYYY-MM-DD) is within NEW_RELEASE_DAYS of today.
+
+    Uses the configured RELEASE_TZ as the "today" reference (see _within_days)."""
     if not release_date:
         return False
     try:
         rd = datetime.strptime(release_date, "%Y-%m-%d").date()
-        return (date.today() - rd).days <= NEW_RELEASE_DAYS
+        return (local_today() - rd).days <= NEW_RELEASE_DAYS
     except ValueError:
         return False
 

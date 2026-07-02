@@ -815,6 +815,9 @@ class RequestConfig:
     # Anime: share of the weighted score given to MyAnimeList when the title is
     # detected as anime and MAL has a rating. 0 disables the boost.
     anime_mal_weight: float = field(default_factory=lambda: _cfg.ANIME_MAL_WEIGHT)
+    # Viewer region (ISO 3166-1) for release-date lookups (release status,
+    # quality fallback). Defaults to the server-wide RELEASE_REGION.
+    region: str = field(default_factory=lambda: _cfg.RELEASE_REGION)
 
 
 def _parse_bool(val: str | None, default: bool) -> bool:
@@ -950,6 +953,11 @@ def build_request_config(params: dict) -> RequestConfig:
         cfg.episode_format = _ef_raw
     cfg.episode_max_age_days    = _i("episode_max_age_days",    cfg.episode_max_age_days, 1, 90)
     cfg.anime_mal_weight        = _f("anime_mal_weight",        cfg.anime_mal_weight, 0.0, 1.0)
+    # region: two-letter ISO 3166-1 country code; "auto"/"" fall back to the
+    # server default; anything malformed is ignored.
+    _rg_raw = (params.get("region") or "").strip().upper()
+    if len(_rg_raw) == 2 and _rg_raw.isalpha():
+        cfg.region = _rg_raw
     cfg.score_color_mode        = _i("score_color_mode",       cfg.score_color_mode,       0,   2)
     cfg.badge_display_mode      = _i("badge_display_mode",     cfg.badge_display_mode,     0,   5)
     cfg.rating_display_mode     = _i("rating_display_mode",    cfg.rating_display_mode,    0,   4)
@@ -1663,7 +1671,10 @@ def build_poster(
                 _score_text = "10" if score >= 100 else f"{score / 10:.1f}"
             else:
                 _score_text = str(score)
-            label = f"{genre_label} ★ {_score_text}"
+            # No score yet (new releases, obscure titles) → skip the star and
+            # the "N/A" entirely; the genre alone reads much cleaner.
+            _has_score = score not in ("N/A", None)
+            label = f"{genre_label} ★ {_score_text}" if _has_score else genre_label
             rating_cy = height * cfg.numeric_score_y_offset
 
             try:
@@ -2150,6 +2161,10 @@ def _server_render_signature() -> str:
         f"contrast={int(_cfg.LOGO_CONTRAST_RESCUE)}",
         f"stretch={int(_cfg.LOGO_STRETCH_DISABLED)}:{_cfg.LOGO_STRETCH_FACTOR:g}",
         f"assets={_render_assets_signature}",
+        # Region/timezone shift release-status + recency sashes; fold the
+        # server defaults in so changing them busts stale composites. An
+        # explicit ?region= is already part of raw_params.
+        f"region={_cfg.RELEASE_REGION}:{_cfg.RELEASE_TZ}",
     ))
 
 
@@ -2821,6 +2836,7 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
             _fb_status = await fetch_release_status(
                 client, tmdb_id, effective_tmdb_key, type,
                 tmdb_data.get("tmdb_status"),
+                region=rcfg.region,
             )
             _fb_tokens = infer_release_quality(type, _fb_status)
             if _fb_tokens:
@@ -3751,6 +3767,7 @@ async def get_poster(
             _release_status = await fetch_release_status(
                 client, tmdb_id, effective_tmdb_key, type,
                 tmdb_data.get("tmdb_status"),
+                region=rcfg.region,
             )
             # r/movieleaks confirmation overrides TMDB's theatrical/production
             # status — if the film is in the digital-release cache it's already
@@ -3799,6 +3816,7 @@ async def get_poster(
             _fb_status = await fetch_release_status(
                 client, tmdb_id, effective_tmdb_key, type,
                 tmdb_data.get("tmdb_status"),
+                region=rcfg.region,
             )
             _fb_tokens = infer_release_quality(type, _fb_status)
             if _fb_tokens:
@@ -3841,6 +3859,7 @@ async def get_poster(
                 "matched_directors": discovery_meta.matched_directors,
                 "matched_cast":      discovery_meta.matched_cast,
                 "release_status":    discovery_meta.release_status,
+                "region":            rcfg.region,
                 "is_anime":          discovery_meta.is_anime,
                 "last_episode":      tmdb_data.get("last_episode") or None,
                 "last_episode_label": discovery_meta.last_episode_label,

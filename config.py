@@ -7,6 +7,7 @@
 #     See the docstring at the top of discovery.py for the full format,
 #     or the project README for a ready-made sample.
 import os
+from datetime import date, datetime
 
 # Storage
 
@@ -53,6 +54,24 @@ EPISODE_SASH_MAX_AGE_DAYS = int(os.environ.get("EPISODE_SASH_MAX_AGE_DAYS", "7")
 # rating for it, give MAL this share of the final weighted score (remaining
 # weight is redistributed over the regular TV weights). 0 disables.
 ANIME_MAL_WEIGHT = max(0.0, min(1.0, float(os.environ.get("ANIME_MAL_WEIGHT", "0.4"))))
+
+# Release region + timezone. RELEASE_REGION (ISO 3166-1, e.g. "MX") scopes
+# movie release-date lookups (Cinema/Streaming/Physical) to the viewer's
+# country when TMDB has region-specific dates; overridable per request with
+# ?region=. RELEASE_TZ is the IANA timezone used as "today" for every
+# release-date comparison (new-release sash, new-episode sash, release
+# status) so a UTC server doesn't flip dates hours before/after the viewer.
+RELEASE_REGION = os.environ.get("RELEASE_REGION", "MX").strip().upper()
+RELEASE_TZ     = os.environ.get("RELEASE_TZ", "America/Mexico_City").strip()
+
+
+def local_today() -> "date":
+    """Today's date in RELEASE_TZ (falls back to server-local on bad tz)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(RELEASE_TZ)).date()
+    except Exception:
+        return date.today()
 SERVER_TMDB_KEY       = os.environ.get("TMDB_API_KEY", "").strip()
 SERVER_MDBLIST_KEY    = os.environ.get("MDBLIST_API_KEY", "").strip()
 SERVER_MDBLIST_KEY_2  = os.environ.get("MDBLIST_API_KEY_2", "").strip()
