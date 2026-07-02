@@ -812,6 +812,12 @@ class RequestConfig:
     # New-episode sash label template ({s}=season, {e}=episode) and recency window.
     episode_format:       str = field(default_factory=lambda: _cfg.EPISODE_SASH_FORMAT)
     episode_max_age_days: int = field(default_factory=lambda: _cfg.EPISODE_SASH_MAX_AGE_DAYS)
+    # Opt-in: trust the request's season/episode as the new-episode sash label,
+    # bypassing the TMDB-driven detection and its recency window. Set by callers
+    # that already know the authoritative latest episode (e.g. Nuvio's AnimeFLV
+    # catalog, which sees releases TMDB hasn't registered yet). Off by default,
+    # so every other client keeps the TMDB last_episode_to_air behaviour.
+    episode_authoritative: bool = False
     # Anime: share of the weighted score given to MyAnimeList when the title is
     # detected as anime and MAL has a rating. 0 disables the boost.
     anime_mal_weight: float = field(default_factory=lambda: _cfg.ANIME_MAL_WEIGHT)
@@ -952,6 +958,7 @@ def build_request_config(params: dict) -> RequestConfig:
     if 0 < len(_ef_raw) <= 20 and "{s}" in _ef_raw and "{e}" in _ef_raw:
         cfg.episode_format = _ef_raw
     cfg.episode_max_age_days    = _i("episode_max_age_days",    cfg.episode_max_age_days, 1, 90)
+    cfg.episode_authoritative   = _b("episode_authoritative",   cfg.episode_authoritative)
     cfg.anime_mal_weight        = _f("anime_mal_weight",        cfg.anime_mal_weight, 0.0, 1.0)
     # region: two-letter ISO 3166-1 country code; "auto"/"" fall back to the
     # server default; anything malformed is ignored.
@@ -3806,6 +3813,17 @@ async def get_poster(
             episode_format=rcfg.episode_format,
             episode_max_age_days=rcfg.episode_max_age_days,
         )
+
+        # Authoritative episode override: when the caller flags it (episode_authoritative)
+        # and supplied a season/episode, trust those for the new-episode sash instead
+        # of TMDB's last_episode_to_air. Used by Nuvio's AnimeFLV catalog, which knows
+        # the real latest episode (incl. double/early releases TMDB hasn't registered).
+        if (rcfg.episode_authoritative and type in ("series", "tv")
+                and season and episode):
+            try:
+                discovery_meta.last_episode_label = rcfg.episode_format.format(s=season, e=episode)
+            except (KeyError, IndexError, ValueError):
+                discovery_meta.last_episode_label = f"S{season}E{episode}"
 
         # ------------------------------------------------------------------
         # Release-based quality fallback — when the quality source returned
