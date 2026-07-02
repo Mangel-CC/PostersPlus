@@ -3029,6 +3029,14 @@ async def get_poster(
     _force_refresh = bool(
         nocache and nocache.strip().lower() in ("1", "true", "yes") and _cfg.ACCESS_KEY
     )
+    # Force refresh also invalidates the TMDB metadata row, so an operator can
+    # pull fresh last_episode / status data (e.g. a just-premiered anime whose
+    # metadata was cached before TMDB registered the episode) in one request.
+    if _force_refresh:
+        _endpoint = "tv" if type in ("tv", "series") else "movie"
+        delete_cached_tmdb_metadata(
+            tmdb_metadata_cache_key(_endpoint, tmdb_id, rcfg.logo_language)
+        )
 
     # ------------------------------------------------------------------
     # Final poster cache — keyed on imdb_id, type, and a short hash of

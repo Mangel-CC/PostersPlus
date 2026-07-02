@@ -197,6 +197,14 @@ BADGE_ANCHOR_Y_RATIO = 0.050   # y offset from top
 TMDB_POSTER_CACHE_DURATION   = 60
 TMDB_LOGO_CACHE_DURATION     = 60
 TMDB_METADATA_CACHE_DURATION = 7    # re-check textless status / logos weekly
+
+# Shorter metadata TTL (days) for TV shows still airing ("Returning Series"):
+# their last_episode_to_air changes weekly (daily for some anime), and the
+# new-episode sash depends on it being fresh. 0 disables (airing shows fall
+# back to the regular TTL above).
+TMDB_METADATA_AIRING_CACHE_DURATION = float(
+    os.environ.get("TMDB_METADATA_AIRING_CACHE_DURATION", "1")
+)
 DAYS_CONSIDERED_NEW          = 14
 NEW_CACHE_DURATION           = 1
 OLD_CACHE_DURATION           = 14

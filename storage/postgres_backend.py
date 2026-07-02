@@ -38,6 +38,7 @@ from config import (
     TMDB_LOGO_CACHE_DIR,
     TMDB_LOGO_CACHE_DURATION,
     TMDB_METADATA_CACHE_DURATION,
+    TMDB_METADATA_AIRING_CACHE_DURATION,
     COMPOSITE_CACHE_TTL,
     COMPOSITE_MAX_ENTRIES,
     QUALITY_OLD_CACHE_DURATION,
@@ -728,7 +729,15 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
                 ) = row
 
                 age_days = (time.time() - cached_at) / 86400
-                if age_days > TMDB_METADATA_CACHE_DURATION:
+                # Airing shows get a shorter TTL — last_episode_to_air moves
+                # weekly and the new-episode sash depends on it being fresh.
+                _ttl = TMDB_METADATA_CACHE_DURATION
+                if (
+                    tmdb_status == "Returning Series"
+                    and TMDB_METADATA_AIRING_CACHE_DURATION > 0
+                ):
+                    _ttl = min(_ttl, TMDB_METADATA_AIRING_CACHE_DURATION)
+                if age_days > _ttl:
                     logger.info(f"TMDB metadata cache expired for {cache_key} ({age_days:.1f}d old)")
                     cur.execute(
                         "DELETE FROM tmdb_metadata_cache WHERE cache_key = %s",
