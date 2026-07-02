@@ -2618,6 +2618,18 @@ _ARTWORK_CACHE_HEADERS      = {"Cache-Control": "public, max-age=86400"}
 _ARTWORK_TEXT_CACHE_HEADERS = {"Cache-Control": "public, max-age=3600"}
 
 
+def _artwork_logo_order(tmdb_data: dict, logo_language: str) -> list:
+    """Orden de idiomas del logo, COMPARTIDO por /logo y el logo compuesto del poster
+    para que ambos devuelvan siempre el mismo arte.
+      normal: logo_language (es = latino) -> idioma original -> neutro -> (texto)
+      anime:  en (romaji/ingles comparten tag "en" en TMDB) -> logo_language ->
+              neutro -> (texto). SIN "ja": un logo solo-japones no se entiende;
+              mejor el titulo romaji/latino en texto."""
+    if _is_anime_title(tmdb_data):
+        return ["en", logo_language, None]
+    return [logo_language, tmdb_data.get("original_language"), None]
+
+
 def _render_text_logo(title: str) -> bytes:
     """Transparent PNG with the title rendered as text — last-resort 'logo'."""
     W, H = 1000, 400
@@ -2718,11 +2730,7 @@ async def get_logo(
     )
     (_genres, _tl, logos, _yr, title, _pp, _bp, tmdb_data) = meta
     original_language = tmdb_data.get("original_language")
-    if _is_anime_title(tmdb_data):
-        # Romaji/english logos share TMDB's "en" tag; then latino, then japanese.
-        order: list = ["en", logo_language, "ja", None]
-    else:
-        order = [logo_language, original_language, None]
+    order = _artwork_logo_order(tmdb_data, logo_language)
     logo = await fetch_logo(
         client, logos, logo_language,
         imdb_id or None, original_language,
@@ -2985,6 +2993,7 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
                 client, logos, rcfg.logo_language,
                 imdb_id=imdb_id, original_language=tmdb_data.get("original_language"),
                 logo_priority=rcfg.logo_priority,
+                language_order=_artwork_logo_order(tmdb_data, rcfg.logo_language),
             ) if _overlay_logo else _resolved(None),
             fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type),
         )
@@ -3728,7 +3737,7 @@ async def get_poster(
             trending_rank,
         ) = await asyncio.gather(
             _image_coro,
-            fetch_logo(client, logos, rcfg.logo_language, imdb_id=imdb_id, original_language=tmdb_data.get("original_language"), logo_priority=rcfg.logo_priority) if (is_textless and not is_no_poster) else _resolved(None),
+            fetch_logo(client, logos, rcfg.logo_language, imdb_id=imdb_id, original_language=tmdb_data.get("original_language"), logo_priority=rcfg.logo_priority, language_order=_artwork_logo_order(tmdb_data, rcfg.logo_language)) if (is_textless and not is_no_poster) else _resolved(None),
             rating_coro,
             fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type),
         )
