@@ -561,7 +561,7 @@ from quality import (
     render_badges_left,
 )
 from ratings import calculate_weighted_score, draw_score_bar, fetch_rating, draw_score_bar_vertical, _draw_solid_pip, draw_frosted_bar, _score_color, _score_color_alt, _score_color_metal
-from tmdb import ensure_light_logo, composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
+from tmdb import ensure_light_logo, fetch_fanart_background_url, composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
 from presets import get_preset, preset_names, preset_catalog
 
 # ---------------------------------------------------------------------------
@@ -2768,15 +2768,30 @@ async def get_background(
     client, type, tmdb_id, meta = await _artwork_metadata(
         tmdb_id, imdb_id, type, tmdb_key, access_key, "en"
     )
-    (_genres, _tl, _logos, _yr, _title, _pp, backdrop_path, tmdb_data) = meta
-    path = backdrop_path or tmdb_data.get("text_backdrop_path")
-    if not path:
-        raise HTTPException(status_code=404, detail="No backdrop on TMDB")
+    (_genres, _tl, _logos, _yr, _title, poster_path, backdrop_path, tmdb_data) = meta
     if size not in ("w780", "w1280", "original"):
         size = "w1280"
     headers = dict(_ARTWORK_CACHE_HEADERS)
-    headers["Location"] = f"https://image.tmdb.org/t/p/{size}{path}"
-    return Response(status_code=302, headers=headers)
+    # 1. Backdrop de TMDB (sin texto preferido, luego con texto).
+    path = backdrop_path or tmdb_data.get("text_backdrop_path")
+    if path:
+        headers["Location"] = f"https://image.tmdb.org/t/p/{size}{path}"
+        return Response(status_code=302, headers=headers)
+    # 2. fanart.tv (showbackground/moviebackground): estrenos de anime suelen tener
+    #    arte ahi antes que en TMDB.
+    fanart_url = await fetch_fanart_background_url(
+        client, type, tmdb_id, _resolve_tmdb_key(tmdb_key)
+    )
+    if fanart_url:
+        headers["Location"] = fanart_url
+        return Response(status_code=302, headers=headers)
+    # 3. Ultimo recurso: el poster como fondo (mejor que un hueco negro), con TTL
+    #    corto para recoger el backdrop real cuando alguien lo suba.
+    if poster_path:
+        short = dict(_ARTWORK_TEXT_CACHE_HEADERS)
+        short["Location"] = f"https://image.tmdb.org/t/p/w780{poster_path}"
+        return Response(status_code=302, headers=short)
+    raise HTTPException(status_code=404, detail="No backdrop available")
 
 
 # ---------------------------------------------------------------------------

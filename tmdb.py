@@ -1022,6 +1022,58 @@ async def _fetch_fanart_logo(
     return logo
 
 
+# Mejor background de fanart.tv (showbackground / moviebackground). Devuelve la URL
+# directa (el endpoint /background redirige, no descarga). Comparte el cache de lookups.
+async def fetch_fanart_background_url(
+    client: httpx.AsyncClient,
+    media_type: str,
+    tmdb_id: str | None,
+    tmdb_key: str | None,
+) -> str | None:
+    if not FANART_API_KEY or not tmdb_id:
+        return None
+    import time as _time
+    ck = ("bg", media_type, str(tmdb_id))
+    now = _time.time()
+    hit = _fanart_lookup_cache.get(ck)
+    if hit and now - hit[0] < _FANART_LOOKUP_TTL:
+        return hit[1]
+    url = None
+    try:
+        if media_type in ("tv", "series"):
+            ext = await client.get(
+                f"https://api.themoviedb.org/3/tv/{tmdb_id}/external_ids",
+                params={"api_key": tmdb_key or ""},
+            )
+            ext.raise_for_status()
+            tvdb_id = (ext.json() or {}).get("tvdb_id")
+            if not tvdb_id:
+                _fanart_lookup_cache[ck] = (now, None)
+                return None
+            resp = await client.get(
+                f"https://webservice.fanart.tv/v3/tv/{tvdb_id}",
+                params={"api_key": FANART_API_KEY},
+            )
+            field = "showbackground"
+        else:
+            resp = await client.get(
+                f"https://webservice.fanart.tv/v3/movies/{tmdb_id}",
+                params={"api_key": FANART_API_KEY},
+            )
+            field = "moviebackground"
+        if resp.status_code != 404:
+            resp.raise_for_status()
+            entries = (resp.json() or {}).get(field) or []
+            if entries:
+                best = max(entries, key=lambda e: int(e.get("likes") or 0))
+                url = best.get("url") or None
+    except Exception as exc:
+        logger.warning(f"fanart.tv background lookup failed for {media_type}/{tmdb_id}: {exc}")
+        return None
+    _fanart_lookup_cache[ck] = (now, url)
+    return url
+
+
 async def _fetch_metahub_logo(
     client: httpx.AsyncClient,
     imdb_id: str,
