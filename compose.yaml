@@ -30,6 +30,7 @@ services:
       - .env # see this file for an explanation of what each flag does
     environment: 
       - TMDB_API_KEY=${TMDB_API_KEY:-}
+      - FANART_API_KEY=${FANART_API_KEY:-}
       - MDBLIST_API_KEY=${MDBLIST_API_KEY:-}
       - ACCESS_KEY=${ACCESS_KEY:-}
       - WORKERS=${WORKERS:-1}
