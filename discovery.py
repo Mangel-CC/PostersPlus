@@ -219,17 +219,26 @@ _STRUCTURAL_LABELS: dict[str, str] = {
 # Checked in order; first match wins within the festival slot.
 # Add new festivals here — keyword pattern is typically festival-<name>-winner.
 # Ordered roughly by prestige (up for debate)
-FESTIVAL_KEYWORDS: dict[str, str] = { 
-    "festival-cannes-winner":      "Palme d'Or",
-    "festival-venice-winner":      "Golden Lion",
-    "festival-berlin-winner":      "Golden Bear",
-    "festival-toronto-winner":     "People's Choice",
-    "festival-sundance-winner":    "Sundance GJ",
-    "festival-busan-winner":       "New Currents",
-    "festival-locarno-winner":     "Golden Leopard",
-    "festival-rotterdam-winner":   "Tiger Award",
-    "festival-sxsw-winner":        "SXSW Jury",
-    "festival-tribeca-winner":     "Tribeca AA",
+#
+# NOTE: the label is the FESTIVAL name, not the top prize. MDblist's
+# `festival-<x>-winner` keyword fires loosely — for films that merely screened
+# in a festival's official selection or won *any* prize, not specifically the
+# top award. Examples: Pixar's "Up" only *opened* Cannes 2009 out of
+# competition (won nothing), and "Perfect Days" won Best Actor at Cannes 2023
+# (not the Palme d'Or) — yet both carry `festival-cannes-winner`. Labelling
+# them "Palme d'Or" was factually wrong, so we use the neutral festival name,
+# which is true for every case the keyword actually covers.
+FESTIVAL_KEYWORDS: dict[str, str] = {
+    "festival-cannes-winner":      "Cannes",
+    "festival-venice-winner":      "Venice",
+    "festival-berlin-winner":      "Berlin",
+    "festival-toronto-winner":     "Toronto",
+    "festival-sundance-winner":    "Sundance",
+    "festival-busan-winner":       "Busan",
+    "festival-locarno-winner":     "Locarno",
+    "festival-rotterdam-winner":   "Rotterdam",
+    "festival-sxsw-winner":        "SXSW",
+    "festival-tribeca-winner":     "Tribeca",
 }
 
 # ISO 639-1 language code → display label shown on the sash.
@@ -340,7 +349,7 @@ class DiscoveryMeta:
     matched_cast:      list[str] = field(default_factory=list)
 
     # Festival winner (from MDblist keywords)
-    festival_label: str | None = None   # e.g. "Palme d'Or Winner"
+    festival_label: str | None = None   # festival name, e.g. "Cannes"
 
     # Structural facts (computed from TMDB metadata)
     is_short_film:  bool = False   # movie, runtime < 40 min
