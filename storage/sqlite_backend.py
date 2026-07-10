@@ -1295,6 +1295,19 @@ def set_cached_release_status(cache_key: str, status: str) -> None:
         logger.error(f"Release status cache write error: {exc}")
 
 
+def delete_cached_release_status(cache_key: str) -> None:
+    """Remove a single release-status entry so the next request re-fetches from TMDB."""
+    try:
+        with _db_lock:
+            get_db().execute(
+                "DELETE FROM release_status_cache WHERE cache_key = ?", (cache_key,)
+            )
+            get_db().commit()
+        logger.info(f"Release status cache invalidated for {cache_key}")
+    except Exception as exc:
+        logger.error(f"Release status cache delete error: {exc}")
+
+
 def get_cached_text_detection(cache_key: str) -> bool | None:
     """Return the cached burned-in-text result (True/False), or None if absent.
 

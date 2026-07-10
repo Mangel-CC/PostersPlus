@@ -48,6 +48,7 @@ _PUBLIC_API = (
     # Upstream v1.1.0 additions:
     "get_cached_release_status",
     "set_cached_release_status",
+    "delete_cached_release_status",
     "get_cached_text_detection",
     "set_cached_text_detection",
     "get_cache_stats",

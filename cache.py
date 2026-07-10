@@ -43,6 +43,7 @@ from storage import (
     get_cached_imdb_to_tmdb,
     set_cached_imdb_to_tmdb,
     set_cached_release_status,
+    delete_cached_release_status,
     set_cached_text_detection,
     get_cache_stats,
 )
@@ -160,6 +161,7 @@ __all__ = [
     "delete_cached_tmdb_metadata",
     "get_cached_release_status",
     "set_cached_release_status",
+    "delete_cached_release_status",
     "get_cached_text_detection",
     "set_cached_text_detection",
     "is_digital_release",

@@ -63,6 +63,7 @@ from config import (
     TMDB_POSTER_MIN_VOTES,
     TMDB_POSTER_MAX_SCORE_DROP,
     local_today,
+    CINEMA_STATUS_MAX_AGE_DAYS,
 )
 
 
@@ -1411,7 +1412,8 @@ async def fetch_release_status(
                 )
                 resp.raise_for_status()
                 today = local_today()
-                has_physical = has_digital = has_theatrical = False
+                has_physical = has_digital = False
+                latest_theatrical: _date | None = None
                 for entry in resp.json().get("results", []):
                     for rd in entry.get("release_dates", []):
                         rtype = rd.get("type")
@@ -1427,16 +1429,26 @@ async def fetch_release_status(
                         elif rtype in (4, 6):   # digital or TV broadcast
                             has_digital = True
                         elif rtype == 3:
-                            has_theatrical = True
+                            if latest_theatrical is None or rdate > latest_theatrical:
+                                latest_theatrical = rdate
+
+                # A theatrical-only record is only trusted as "still in cinemas" within
+                # CINEMA_STATUS_MAX_AGE_DAYS of that release — TMDB frequently never gets
+                # a digital/physical entry added for older/obscure films, which would
+                # otherwise mark a decades-old movie as perpetually "Cinema".
+                is_recent_theatrical = (
+                    latest_theatrical is not None
+                    and (today - latest_theatrical).days <= CINEMA_STATUS_MAX_AGE_DAYS
+                )
 
                 if has_physical:
                     result = "Physical"
                 elif has_digital:
                     result = "Streaming"
-                elif has_theatrical:
+                elif is_recent_theatrical:
                     result = "Cinema"
                 elif tmdb_status == "Released":
-                    # Released per TMDB but no release date records found —
+                    # Released per TMDB but no (recent) release date records found —
                     # incomplete TMDB data rather than genuinely unreleased.
                     result = "Streaming"
                 else:

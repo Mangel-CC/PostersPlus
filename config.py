@@ -64,6 +64,14 @@ ANIME_MAL_WEIGHT = max(0.0, min(1.0, float(os.environ.get("ANIME_MAL_WEIGHT", "0
 RELEASE_REGION = os.environ.get("RELEASE_REGION", "MX").strip().upper()
 RELEASE_TZ     = os.environ.get("RELEASE_TZ", "America/Mexico_City").strip()
 
+# How long a movie with ONLY a theatrical release date on TMDB (no digital/physical
+# entry) is still labelled "Cinema". TMDB's release_dates data is frequently
+# incomplete for older/obscure films — a decades-old movie can have just its
+# theatrical date on record with no digital/physical follow-up ever added, which
+# would otherwise mark it "still in cinemas" forever. Past this window, treat it
+# like the "Released with no dates" case (assume it's out on streaming somewhere).
+CINEMA_STATUS_MAX_AGE_DAYS = int(os.environ.get("CINEMA_STATUS_MAX_AGE_DAYS", "180"))
+
 
 def local_today() -> "date":
     """Today's date in RELEASE_TZ (falls back to server-local on bad tz)."""

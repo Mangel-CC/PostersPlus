@@ -536,6 +536,7 @@ from cache import (
     is_digital_release,
     set_cached_rating,
     delete_cached_tmdb_metadata,
+    delete_cached_release_status,
     prune_caches,
     get_cache_stats,
 )
@@ -3250,11 +3251,15 @@ async def get_poster(
     # Force refresh also invalidates the TMDB metadata row, so an operator can
     # pull fresh last_episode / status data (e.g. a just-premiered anime whose
     # metadata was cached before TMDB registered the episode) in one request.
+    # Also invalidates the release-status row (7-day TTL) so a corrected
+    # Cinema/Streaming/Physical classification (e.g. after a release-status
+    # logic fix) doesn't have to wait out the old cached value.
     if _force_refresh:
         _endpoint = "tv" if type in ("tv", "series") else "movie"
         delete_cached_tmdb_metadata(
             tmdb_metadata_cache_key(_endpoint, tmdb_id, rcfg.logo_language)
         )
+        delete_cached_release_status(f"{type}_{tmdb_id}")
 
     # ------------------------------------------------------------------
     # Final poster cache — keyed on imdb_id, type, and a short hash of
