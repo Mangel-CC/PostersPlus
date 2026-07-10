@@ -2181,13 +2181,18 @@ def _composite_cache_key(
     media_type: str,
     raw_params: dict,
     fallback_to_imdb: bool,
+    season: int = 0,
+    episode: int = 0,
 ) -> str:
     """Build the composite blobstore key. Shared by /poster and the /p preset
     route so an equivalent preset and /poster render share one composite — no
     duplicate bytes. Server-side settings that affect the output but aren't URL
     params (detection thresholds, poster-selection policy, rating policy, render
     signature) are folded into the hash so changing them auto-busts stale
-    composites."""
+    composites. season/episode are excluded from raw_params (handled as their own
+    typed args elsewhere) but still change the rendered "new episode" sash text, so
+    they're folded in here directly — otherwise two different episodes of the same
+    title would collide on one cached composite and one would look stale forever."""
     if _cfg.TEXTLESS_TEXT_DETECTION:
         from text_detect import DETECT_RES_SIG
         _detect_sig = (
@@ -2200,6 +2205,7 @@ def _composite_cache_key(
     )
     _rating_policy_sig = f"|rp={_cfg.RATING_MIN_VOTES}:{int(fallback_to_imdb)}"
     _server_sig = "|server=" + _server_render_signature()
+    _episode_sig = f"|ep={season}:{episode}" if season and episode else ""
     _params_hash = hashlib.sha256(
         (
             "&".join(f"{k}={v}" for k, v in sorted(raw_params.items()))
@@ -2207,6 +2213,7 @@ def _composite_cache_key(
             + _poster_selection_sig
             + _rating_policy_sig
             + _server_sig
+            + _episode_sig
         ).encode()
     ).hexdigest()[:16]
     return f"{imdb_id}:{tmdb_id}:{media_type}:{_params_hash}"
@@ -3256,7 +3263,8 @@ async def get_poster(
     # ------------------------------------------------------------------
     if not quality and not _cfg.DISABLE_COMPOSITE_CACHE:
         final_cache_key = _composite_cache_key(
-            imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb
+            imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb,
+            season=season, episode=episode,
         )
         if _force_refresh:
             logger.info(f"Force refresh (nocache) for {final_cache_key} — bypassing cache read")
