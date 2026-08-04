@@ -2630,11 +2630,16 @@ def _artwork_logo_order(tmdb_data: dict, logo_language: str) -> list:
     """Orden de idiomas del logo, COMPARTIDO por /logo y el logo compuesto del poster
     para que ambos devuelvan siempre el mismo arte.
       normal: logo_language (es = latino) -> idioma original -> neutro -> (texto)
+      es:     es-MX (via fetch_logo's regional-tag matching) -> ingles -> neutro
+              -> (texto). SIN fallback al "es" generico de TMDB (estilo España)
+              ni al idioma original: si no hay logo mexicano, mejor ingles.
       anime:  en (romaji/ingles comparten tag "en" en TMDB) -> logo_language ->
               neutro -> (texto). SIN "ja": un logo solo-japones no se entiende;
               mejor el titulo romaji/latino en texto."""
     if _is_anime_title(tmdb_data):
         return ["en", logo_language, None]
+    if logo_language == "es":
+        return [logo_language, "en", None]
     return [logo_language, tmdb_data.get("original_language"), None]
 
 

@@ -24,6 +24,19 @@ def svg_logo_supported() -> bool:
     return _HAS_CAIROSVG
 
 
+# Some languages TMDB tags logos with a region-qualified code instead of the
+# generic ISO 639-1 one — Spanish logos are frequently "es-MX" (Latin America)
+# rather than plain "es" (which skews Spain-style). We fetch AND match the
+# regional tag instead of the generic one for those languages, per user
+# preference: Latin American Spanish only, never Spain-style "es".
+_REGIONAL_LOGO_LANGUAGE: dict[str, str] = {"es": "es-MX"}
+
+
+def _logo_match_lang(language: str | None) -> str | None:
+    """TMDB logo iso_639_1 tag to actually match for a configured language."""
+    return _REGIONAL_LOGO_LANGUAGE.get(language, language)
+
+
 def _rasterize_svg(svg_bytes: bytes, target_w: int = 1000) -> "Image.Image | None":
     """Render SVG bytes to an RGBA PIL image at target_w px wide, or None on failure."""
     if not _HAS_CAIROSVG:
@@ -242,6 +255,10 @@ def tmdb_metadata_cache_key(
     selection_sig = (
         f"p{TMDB_POSTER_MIN_VOTES}"
         f"d{TMDB_POSTER_MAX_SCORE_DROP:g}"
+        # esmx1: bump when the set of image languages requested from TMDB
+        # changes (e.g. adding a regional variant), so stale cache entries
+        # fetched before the change don't linger for the full metadata TTL.
+        "_esmx1"
     )
     return f"{endpoint}_{tmdb_id}_{logo_language}_{selection_sig}"
 
@@ -330,9 +347,17 @@ async def fetch_poster_metadata(
     #   null  — language-neutral entries (TMDB's signal for textless/unspecified)
     #   en    — English (logos + fallback posters)
     #   logo_language — non-English logo candidates when requested
+    #   its regional variant (e.g. es-MX for es) — TMDB tags some logos with
+    #   a region-qualified code instead of the generic one; without asking for
+    #   it explicitly, TMDB never returns it.
     # Note: null-language ≠ guaranteed text-free; TMDB uses it for both truly
     # textless art and posters where the language simply wasn't catalogued.
-    _img_langs = "en,null" if logo_language == "en" else f"{logo_language},en,null"
+    if logo_language == "en":
+        _img_langs = "en,null"
+    else:
+        _regional = _REGIONAL_LOGO_LANGUAGE.get(logo_language)
+        _prefix = f"{_regional},{logo_language}" if _regional else logo_language
+        _img_langs = f"{_prefix},en,null"
 
     logger.info(f"External API Call: Requested meta from TMDB for {tmdb_id}")
     resp = await client.get(
@@ -1214,14 +1239,14 @@ async def fetch_logo(
             _seen.add(language)
             bucket = (
                 neutral if language in (None, "")
-                else [lg for lg in _cand if lg.get("iso_639_1") == language]
+                else [lg for lg in _cand if lg.get("iso_639_1") == _logo_match_lang(language)]
             )
             if bucket:
                 candidates = bucket
                 break
     else:
         language_buckets = {
-            language: [lg for lg in _cand if lg.get("iso_639_1") == language]
+            language: [lg for lg in _cand if lg.get("iso_639_1") == _logo_match_lang(language)]
             for language in image_language_order(
                 logo_language, original_language, logo_priority
             )
