@@ -1257,9 +1257,19 @@ async def fetch_logo(
                 break
         candidates = candidates or neutral or english
 
+    # Secondary key: aspect_ratio. Regional-language buckets (the "es"/MX one in
+    # particular, see _REQUIRED_LOGO_COUNTRY) are frequently 0-vote ties between a
+    # real text wordmark and an icon/symbol mistagged with that language on TMDB —
+    # confirmed live for "The Incredibles" (tmdb 9806): both its es/MX logos have
+    # vote_average 0, one is the bare Pixar ball icon (aspect_ratio 1.37), the other
+    # is the actual "LOS INCREÍBLES" wordmark (aspect_ratio 3.68), and picking
+    # whichever TMDB happened to list first defeated the whole point of asking for a
+    # language-specific logo. A wordmark is reliably much wider than tall; an
+    # icon/symbol is closer to square. Only breaks ties — never overrides a real
+    # vote_average difference.
     candidates = sorted(
         candidates,
-        key=lambda x: x.get("vote_average", 0),
+        key=lambda x: (x.get("vote_average", 0), x.get("aspect_ratio", 0)),
         reverse=True,
     )
 
