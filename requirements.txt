@@ -15,7 +15,7 @@ cairosvg>=2.7,<3
 # RapidOCR declares GUI OpenCV; Docker removes that wheel and keeps headless.
 opencv-python-headless>=4.8,<5
 onnxruntime>=1.17,<2
-rapidocr>=3.8,<4
+rapidocr>=3.8,<3.9  # 3.9 renamed the bundled cls/rec models that text_detect.py loads by filename
 
 # --- ElfHosted fork: hosted-mode backends ---------------------------------
 # All optional at runtime — the backend modules are only imported when their
