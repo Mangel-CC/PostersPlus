@@ -69,6 +69,7 @@ async def es_mx_titles(client, media_type: str, tmdb_id, tmdb_key):
                               params={"api_key": tmdb_key})
         j2 = r2.json()
         orig = j2.get("original_title") or j2.get("original_name") or ""
+        orig_lang = j2.get("original_language") or ""
     except Exception as exc:
         logger.warning(f"es/MX title comparison failed for {tmdb_id}: {exc}")
         return None
@@ -80,7 +81,7 @@ async def es_mx_titles(client, media_type: str, tmdb_id, tmdb_key):
                 return d.get("title") or d.get("name") or ""
         return ""
 
-    res = (_title("ES"), _title("MX"), orig)
+    res = (_title("ES"), _title("MX"), orig, orig_lang)
     _ES_TITLE_SAME_CACHE[key] = res
     return res
 
@@ -149,7 +150,11 @@ async def es_logo_fallback(client, es_logos: list[dict], media_type, tmdb_id, tm
     titles = await es_mx_titles(client, media_type, tmdb_id, tmdb_key)
     if not titles:
         return []
-    es_t, mx_t, orig = titles
+    es_t, mx_t, orig, orig_lang = titles
+    if not es_t and not mx_t:
+        # Spanish-language original ("El hoyo"): TMDB keeps no es-ES/es-MX translations, the
+        # title is the same everywhere, so any Spanish logo is fine.
+        return es_logos if orig_lang == "es" else []
     if es_t and mx_t:
         if _norm_title(es_t) == _norm_title(mx_t):
             return es_logos
