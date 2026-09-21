@@ -562,7 +562,7 @@ from quality import (
     render_badges_left,
 )
 from ratings import calculate_weighted_score, draw_score_bar, fetch_rating, draw_score_bar_vertical, _draw_solid_pip, draw_frosted_bar, _score_color, _score_color_alt, _score_color_metal
-from tmdb import ensure_light_logo, fetch_fanart_background_url, composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
+from tmdb import es_display_title, ensure_light_logo, fetch_fanart_background_url, composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
 from presets import get_preset, preset_names, preset_catalog
 
 # ---------------------------------------------------------------------------
@@ -1297,6 +1297,28 @@ def _draw_combined_text_badge(
         draw.text((cx, y), fmt, font=font, fill=ink)
 
 
+_GENRE_FONTS: dict[str, str] = {
+    "Horror":           "Creepster-Regular.ttf",
+    "Thriller":         "Creepster-Regular.ttf",
+    "Mystery":          "Creepster-Regular.ttf",
+    "Action":           "BebasNeue-Bold.ttf",
+    "Sci-Fi":           "BebasNeue-Bold.ttf",
+    "Adventure":        "BebasNeue-Bold.ttf",
+    "Fantasy":          "BebasNeue-Bold.ttf",
+    "Western":          "BebasNeue-Bold.ttf",
+    "Comedy":           "Pacifico-Regular.ttf",
+    "Animation":        "Pacifico-Regular.ttf",
+    "Family":           "Pacifico-Regular.ttf",
+    "Drama":            "PlayfairDisplay-Bold.ttf",
+    "Romance":          "PlayfairDisplay-Bold.ttf",
+    "History":          "PlayfairDisplay-Bold.ttf",
+    "Music":            "PlayfairDisplay-Bold.ttf",
+    "Crime":            "Oswald-Bold.ttf",
+    "War":              "Oswald-Bold.ttf",
+    "Documentary":      "Oswald-Bold.ttf",
+}
+
+
 def build_poster(
     image: Image.Image,
     score: int | str,
@@ -1476,26 +1498,6 @@ def build_poster(
         #   Drama / Romance / History    → Playfair   (elegant, literary)
         #   Crime / War / Documentary    → Oswald     (authoritative, strong)
         #   Default                      → NotoSerif  (neutral, readable)
-        _GENRE_FONTS: dict[str, str] = {
-            "Horror":           "Creepster-Regular.ttf",
-            "Thriller":         "Creepster-Regular.ttf",
-            "Mystery":          "Creepster-Regular.ttf",
-            "Action":           "BebasNeue-Bold.ttf",
-            "Sci-Fi":           "BebasNeue-Bold.ttf",
-            "Adventure":        "BebasNeue-Bold.ttf",
-            "Fantasy":          "BebasNeue-Bold.ttf",
-            "Western":          "BebasNeue-Bold.ttf",
-            "Comedy":           "Pacifico-Regular.ttf",
-            "Animation":        "Pacifico-Regular.ttf",
-            "Family":           "Pacifico-Regular.ttf",
-            "Drama":            "PlayfairDisplay-Bold.ttf",
-            "Romance":          "PlayfairDisplay-Bold.ttf",
-            "History":          "PlayfairDisplay-Bold.ttf",
-            "Music":            "PlayfairDisplay-Bold.ttf",
-            "Crime":            "Oswald-Bold.ttf",
-            "War":              "Oswald-Bold.ttf",
-            "Documentary":      "Oswald-Bold.ttf",
-        }
         _font_file = _GENRE_FONTS.get(genre, "NotoSerif-Bold.ttf")
 
         # Fallback-title rendering, sized to fill the SAME envelope a logo fills
@@ -2643,8 +2645,21 @@ def _artwork_logo_order(tmdb_data: dict, logo_language: str) -> list:
     return [logo_language, tmdb_data.get("original_language"), None]
 
 
-def _render_text_logo(title: str) -> bytes:
-    """Transparent PNG with the title rendered as text — last-resort 'logo'."""
+def _genre_label_from_ids(genre_ids) -> str:
+    """Same TMDB genre_ids -> label resolution the poster path uses."""
+    gid_set = set(genre_ids or [])
+    for gid in _cfg.GENRE_PRIORITY:
+        if gid in gid_set:
+            cand = _cfg.GENRE_MAP.get(gid, "")
+            if cand:
+                return cand
+    return "Unknown"
+
+
+def _render_text_logo(title: str, genre: str = "Unknown") -> bytes:
+    """Transparent PNG with the title rendered as text — last-resort 'logo'.
+    Uses the same genre-aware font as the poster's text-title fallback."""
+    font_file = _GENRE_FONTS.get(genre, "NotoSerif-Bold.ttf")
     W, H = 1000, 400
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
@@ -2669,7 +2684,7 @@ def _render_text_logo(title: str) -> bytes:
     font_size = 40
     for fs in range(160, 39, -8):
         try:
-            f = ImageFont.truetype(os.path.join(_FONTS_DIR, "Inter-Bold.ttf"), fs)
+            f = ImageFont.truetype(os.path.join(_FONTS_DIR, font_file), fs)
         except IOError:
             break
         ls = _wrap(f)
@@ -2765,8 +2780,12 @@ async def get_logo(
         return Response(content=buf.getvalue(), media_type="image/png",
                         headers=_ARTWORK_CACHE_HEADERS)
     # Text fallback — shorter TTL so a logo added to TMDB later gets picked up.
-    return Response(content=_render_text_logo(title), media_type="image/png",
-                    headers=_ARTWORK_TEXT_CACHE_HEADERS)
+    if logo_language == "es":
+        title = await es_display_title(
+            client, type, tmdb_id, _resolve_tmdb_key(tmdb_key), title,
+            tmdb_data.get("original_title"), original_language)
+    return Response(content=_render_text_logo(title, _genre_label_from_ids(_genres)),
+                    media_type="image/png", headers=_ARTWORK_TEXT_CACHE_HEADERS)
 
 
 @app.get("/background")
@@ -3544,6 +3563,10 @@ async def get_poster(
         genre_ids, is_textless, logos, release_year, title, poster_path, backdrop_path, tmdb_data = (
             await fetch_poster_metadata(client, tmdb_id, effective_tmdb_key, type, rcfg.logo_language)
         )
+        if rcfg.logo_language == "es":
+            title = await es_display_title(
+                client, type, tmdb_id, effective_tmdb_key, title,
+                tmdb_data.get("original_title"), tmdb_data.get("original_language"))
         _text_titles = tuple(dict.fromkeys(
             value for value in (title, tmdb_data.get("original_title")) if value
         ))

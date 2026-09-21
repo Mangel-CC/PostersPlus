@@ -86,6 +86,25 @@ async def es_mx_titles(client, media_type: str, tmdb_id, tmdb_key):
     return res
 
 
+
+async def es_display_title(client, media_type: str, tmdb_id, tmdb_key,
+                           title: str, original_title: str | None,
+                           original_language: str | None) -> str:
+    """Title to draw as text for a Latin-American Spanish viewer.
+
+    TMDB returns the English title when no es-MX translation exists, which is wrong for
+    films whose original language is Spanish ("Animals" for "Animales"). Order: the es-MX
+    translation, else the original title when the film is Spanish-original, else `title`."""
+    titles = await es_mx_titles(client, media_type, tmdb_id, tmdb_key)
+    if titles:
+        _es_t, mx_t, _orig, _lang = titles
+        if mx_t:
+            return mx_t
+    if original_language == "es" and original_title:
+        return original_title
+    return title
+
+
 _LOGO_OCR_CACHE: dict = {}
 _OCR_ENGINE = None
 
