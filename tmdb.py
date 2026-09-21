@@ -95,10 +95,15 @@ def _ocr_logo_sync(png_bytes: bytes) -> list[str]:
     if _OCR_ENGINE is None:
         _OCR_ENGINE = RapidOCR()
     im = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
-    bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
-    bg.alpha_composite(im)
-    r = _OCR_ENGINE(np.array(bg.convert("RGB")))
-    return list(getattr(r, "txts", None) or [])
+    # Logos are often solid white (or solid dark): read them over both a light and a dark
+    # backdrop, otherwise the text vanishes into one of them.
+    out: list[str] = []
+    for colour in ((255, 255, 255, 255), (30, 30, 30, 255)):
+        bg = Image.new("RGBA", im.size, colour)
+        bg.alpha_composite(im)
+        r = _OCR_ENGINE(np.array(bg.convert("RGB")))
+        out.extend(getattr(r, "txts", None) or [])
+    return out
 
 
 def _title_tokens(t: str) -> list[str]:
@@ -114,12 +119,12 @@ def _token_hit(tok: str, ocr_tokens: list[str]) -> bool:
                for o in ocr_tokens)
 
 
-async def _logo_reads_as_mx(client, logo: dict, es_title: str, mx_title: str) -> bool:
-    """True when the OCR'd text of this Spain-tagged logo matches the Mexican title
+async def _logo_mx_score(client, logo: dict, es_title: str, mx_title: str) -> int:
+    """Score > 0 when the OCR'd text of this Spain-tagged logo matches the Mexican title
     better than the Spain one (TMDB frequently mislabels MX logos as ES)."""
     path = logo["file_path"]
     if path.lower().endswith(".svg"):
-        return False
+        return 0
     if path not in _LOGO_OCR_CACHE:
         try:
             resp = await client.get(f"https://image.tmdb.org/t/p/w500{path}")
@@ -127,13 +132,13 @@ async def _logo_reads_as_mx(client, logo: dict, es_title: str, mx_title: str) ->
             _LOGO_OCR_CACHE[path] = await asyncio.to_thread(_ocr_logo_sync, resp.content)
         except Exception as exc:
             logger.warning(f"logo OCR failed for {path}: {exc}")
-            return False
+            return 0
     ocr = [tk for line in _LOGO_OCR_CACHE[path] for tk in _title_tokens(line)]
     mx_t, es_t = set(_title_tokens(mx_title)), set(_title_tokens(es_title))
     mx_only, es_only = mx_t - es_t, es_t - mx_t
     score = sum(_token_hit(t, ocr) for t in mx_only) - sum(_token_hit(t, ocr) for t in es_only)
     logger.info(f"logo OCR {path}: {ocr} mx_only={sorted(mx_only)} es_only={sorted(es_only)} score={score}")
-    return score > 0
+    return score
 
 
 async def es_logo_fallback(client, es_logos: list[dict], media_type, tmdb_id, tmdb_key) -> list[dict]:
@@ -152,11 +157,17 @@ async def es_logo_fallback(client, es_logos: list[dict], media_type, tmdb_id, tm
         return es_logos if _norm_title(es_t) == _norm_title(orig) else []
     else:
         return []
-    keep = []
+    scored = []
     for lg in sorted(es_logos, key=lambda x: (x.get("vote_average", 0), x.get("aspect_ratio", 0)), reverse=True)[:6]:
-        if await _logo_reads_as_mx(client, lg, es_t, mx_t):
-            keep.append(lg)
-    return keep
+        sc = await _logo_mx_score(client, lg, es_t, mx_t)
+        if sc > 0:
+            scored.append((sc, lg))
+    # Best reading of the MX title first; fetch_logo's vote/aspect sort then only breaks
+    # ties among the top-scoring ones.
+    if not scored:
+        return []
+    top = max(sc for sc, _ in scored)
+    return [lg for sc, lg in scored if sc == top]
 
 
 def _rasterize_svg(svg_bytes: bytes, target_w: int = 1000) -> "Image.Image | None":
