@@ -52,16 +52,13 @@ def _norm_title(t: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", t.casefold())
 
 
-async def es_title_same_as_mx(client, media_type: str, tmdb_id, tmdb_key) -> bool:
-    """True when the Spain (ES) and Mexico (MX) Spanish titles are the same, so a
-    Spain-tagged logo is safe to show to a Latin-American viewer. Titles that differ
-    ("Rapidos y Furiosos" vs "A todo gas") must NOT use the Spain logo. A missing MX
-    translation counts as 'same' only if ES matches the original title."""
+async def es_mx_titles(client, media_type: str, tmdb_id, tmdb_key):
+    """(es_title, mx_title, original_title) from TMDB translations, cached. None on failure."""
     key = (media_type, str(tmdb_id))
     if key in _ES_TITLE_SAME_CACHE:
         return _ES_TITLE_SAME_CACHE[key]
     if not tmdb_key or not tmdb_id:
-        return False
+        return None
     endpoint = "tv" if media_type in ("tv", "series") else "movie"
     try:
         r = await client.get(f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}/translations",
@@ -70,10 +67,11 @@ async def es_title_same_as_mx(client, media_type: str, tmdb_id, tmdb_key) -> boo
         trs = r.json().get("translations", [])
         r2 = await client.get(f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}",
                               params={"api_key": tmdb_key})
-        orig = r2.json().get("original_title") or r2.json().get("original_name") or ""
+        j2 = r2.json()
+        orig = j2.get("original_title") or j2.get("original_name") or ""
     except Exception as exc:
         logger.warning(f"es/MX title comparison failed for {tmdb_id}: {exc}")
-        return False
+        return None
 
     def _title(country):
         for t in trs:
@@ -82,15 +80,83 @@ async def es_title_same_as_mx(client, media_type: str, tmdb_id, tmdb_key) -> boo
                 return d.get("title") or d.get("name") or ""
         return ""
 
-    es, mx = _title("ES"), _title("MX")
-    if es and mx:
-        same = _norm_title(es) == _norm_title(mx)
-    elif es:
-        same = _norm_title(es) == _norm_title(orig)
+    res = (_title("ES"), _title("MX"), orig)
+    _ES_TITLE_SAME_CACHE[key] = res
+    return res
+
+
+_LOGO_OCR_CACHE: dict = {}
+_OCR_ENGINE = None
+
+
+def _ocr_logo_sync(png_bytes: bytes) -> list[str]:
+    global _OCR_ENGINE
+    from rapidocr import RapidOCR
+    if _OCR_ENGINE is None:
+        _OCR_ENGINE = RapidOCR()
+    im = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+    bg.alpha_composite(im)
+    r = _OCR_ENGINE(np.array(bg.convert("RGB")))
+    return list(getattr(r, "txts", None) or [])
+
+
+def _title_tokens(t: str) -> list[str]:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", t or "")
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return re.findall(r"[a-z0-9]+", t.casefold())
+
+
+def _token_hit(tok: str, ocr_tokens: list[str]) -> bool:
+    import difflib
+    return any(o == tok or (len(tok) >= 4 and difflib.SequenceMatcher(None, o, tok).ratio() >= 0.8)
+               for o in ocr_tokens)
+
+
+async def _logo_reads_as_mx(client, logo: dict, es_title: str, mx_title: str) -> bool:
+    """True when the OCR'd text of this Spain-tagged logo matches the Mexican title
+    better than the Spain one (TMDB frequently mislabels MX logos as ES)."""
+    path = logo["file_path"]
+    if path.lower().endswith(".svg"):
+        return False
+    if path not in _LOGO_OCR_CACHE:
+        try:
+            resp = await client.get(f"https://image.tmdb.org/t/p/w500{path}")
+            resp.raise_for_status()
+            _LOGO_OCR_CACHE[path] = await asyncio.to_thread(_ocr_logo_sync, resp.content)
+        except Exception as exc:
+            logger.warning(f"logo OCR failed for {path}: {exc}")
+            return False
+    ocr = [tk for line in _LOGO_OCR_CACHE[path] for tk in _title_tokens(line)]
+    mx_t, es_t = set(_title_tokens(mx_title)), set(_title_tokens(es_title))
+    mx_only, es_only = mx_t - es_t, es_t - mx_t
+    score = sum(_token_hit(t, ocr) for t in mx_only) - sum(_token_hit(t, ocr) for t in es_only)
+    logger.info(f"logo OCR {path}: {ocr} mx_only={sorted(mx_only)} es_only={sorted(es_only)} score={score}")
+    return score > 0
+
+
+async def es_logo_fallback(client, es_logos: list[dict], media_type, tmdb_id, tmdb_key) -> list[dict]:
+    """Spain-tagged 'es' logos that are safe for a Latin-American viewer: all of them when the
+    ES and MX titles match, otherwise only those whose text reads as the MX title."""
+    if not es_logos:
+        return []
+    titles = await es_mx_titles(client, media_type, tmdb_id, tmdb_key)
+    if not titles:
+        return []
+    es_t, mx_t, orig = titles
+    if es_t and mx_t:
+        if _norm_title(es_t) == _norm_title(mx_t):
+            return es_logos
+    elif es_t:
+        return es_logos if _norm_title(es_t) == _norm_title(orig) else []
     else:
-        same = False
-    _ES_TITLE_SAME_CACHE[key] = same
-    return same
+        return []
+    keep = []
+    for lg in sorted(es_logos, key=lambda x: (x.get("vote_average", 0), x.get("aspect_ratio", 0)), reverse=True)[:6]:
+        if await _logo_reads_as_mx(client, lg, es_t, mx_t):
+            keep.append(lg)
+    return keep
 
 
 def _rasterize_svg(svg_bytes: bytes, target_w: int = 1000) -> "Image.Image | None":
@@ -1294,11 +1360,11 @@ async def fetch_logo(
                 else [lg for lg in _cand if _logo_lang_matches(lg, language)]
             )
             if not bucket and language == "es" and fanart_ctx:
-                # No es-MX logo: accept a Spain-tagged one only when the Spain and
-                # Mexico titles are identical (avoids "A todo gas" for "Rapidos y Furiosos").
-                if await es_title_same_as_mx(client, fanart_ctx.get("media_type", "movie"),
-                                             fanart_ctx.get("tmdb_id"), fanart_ctx.get("tmdb_key")):
-                    bucket = [lg for lg in _cand if lg.get("iso_639_1") == "es"]
+                # No es-MX logo: use Spain-tagged ones only if they are safe (same title, or
+                # the image text actually reads as the Mexican title -- TMDB mislabels many).
+                bucket = await es_logo_fallback(
+                    client, [lg for lg in _cand if lg.get("iso_639_1") == "es"],
+                    fanart_ctx.get("media_type", "movie"), fanart_ctx.get("tmdb_id"), fanart_ctx.get("tmdb_key"))
             if bucket:
                 candidates = bucket
                 break
