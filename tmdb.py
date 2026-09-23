@@ -2,8 +2,10 @@
 import asyncio
 import colorsys
 import io
+import os
 import logging
 import re
+import importlib.resources
 from datetime import date as _date, timedelta as _timedelta
 import httpx
 import numpy as np
@@ -109,11 +111,48 @@ _LOGO_OCR_CACHE: dict = {}
 _OCR_ENGINE = None
 
 
+def _new_logo_ocr_engine():
+    """RapidOCR(), sin argumentos, resuelve su config por defecto de ESA version del
+    paquete -- y esa config a veces pide un archivo de modelo ("_mobile") que la propia
+    version instalada no trae empaquetado (solo trae el "_infer"), asi que intenta
+    descargarlo en caliente. site-packages es de solo lectura para el usuario del
+    contenedor (appuser) -> PermissionError, silenciado por el try/except de
+    _logo_reads_as_mx/_logo_mx_score, y el fallback a espanol dejaba de funcionar sin
+    ningun error visible (confirmado en vivo: aparecio recien despues de fijar rapidocr
+    a <3.8.2 para el detector de texto-quemado de text_detect.py, que usa una instancia
+    de RapidOCR totalmente aparte). Se apuntan los 3 modelos (det/cls/rec) a los archivos
+    que SI estan empaquetados con esta version, buscando por nombre en vez de fijar el
+    nombre exacto (que cambia entre versiones de rapidocr, ver commits de rapidocr<3.8.2
+    y <3.9 en este mismo repo)."""
+    import glob
+    from rapidocr import RapidOCR
+    models_dir = str(importlib.resources.files("rapidocr").joinpath("models"))
+    onnx = glob.glob(os.path.join(models_dir, "*.onnx"))
+
+    def _find(*needles):
+        for f in onnx:
+            name = os.path.basename(f).lower()
+            if all(n in name for n in needles):
+                return f
+        return None
+
+    det = _find("det")
+    cls = _find("cls")
+    rec = _find("rec")
+    if not (det and cls and rec):
+        logger.warning(f"logo OCR: modelos rapidocr no encontrados en {models_dir} ({onnx})")
+        return RapidOCR()
+    return RapidOCR(params={
+        "Det.model_path": det,
+        "Cls.model_path": cls,
+        "Rec.model_path": rec,
+    })
+
+
 def _ocr_logo_sync(png_bytes: bytes) -> list[str]:
     global _OCR_ENGINE
-    from rapidocr import RapidOCR
     if _OCR_ENGINE is None:
-        _OCR_ENGINE = RapidOCR()
+        _OCR_ENGINE = _new_logo_ocr_engine()
     im = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
     # Logos are often solid white (or solid dark): read them over both a light and a dark
     # backdrop, otherwise the text vanishes into one of them.
