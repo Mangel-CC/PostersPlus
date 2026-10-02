@@ -581,14 +581,16 @@ async def fetch_poster_metadata(
     logos     = images.get("logos", [])
     backdrops = images.get("backdrops", [])
 
-    # TMDB bug (reproduced live on a freshly-added, zero-vote logo): the
-    # append_to_response=images sub-resource sometimes serves an image with its
-    # iso_639_1/iso_3166_1 stripped to null, while the dedicated .../images
-    # endpoint correctly reports its real language+country for the SAME
-    # file_path. That silently dumps a genuine native-language logo into the
-    # untagged bucket and we fall back to English. Only worth the extra TMDB
-    # call when the requested language bucket came up empty AND there's a
-    # suspicious zero-vote null/null entry that could be the mistagged one.
+    # TMDB bug (reproduced live on a freshly-added, zero-vote logo): ANY request
+    # carrying include_image_language — on append_to_response=images or even the
+    # dedicated .../images endpoint — serves such an image with its
+    # iso_639_1/iso_3166_1 stripped to null; only an UNFILTERED .../images call
+    # reports its real language+country for the same file_path. That silently
+    # dumps a genuine native-language logo into the untagged bucket and we fall
+    # back to English. Only worth the extra (unfiltered, so uncached — must
+    # fetch every logo, not just the ones in our language list) TMDB call when
+    # the requested language bucket came up empty AND there's a suspicious
+    # zero-vote null/null entry that could be the mistagged one.
     _req_country = _REQUIRED_LOGO_COUNTRY.get(logo_language)
     _lang_matched = (
         logo_language in (None, "", "en")
@@ -603,7 +605,7 @@ async def fetch_poster_metadata(
         try:
             _img_resp = await client.get(
                 f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}/images",
-                params={"api_key": tmdb_key, "include_image_language": _img_langs},
+                params={"api_key": tmdb_key},
             )
             if _img_resp.status_code == 200:
                 _real_logos = {l["file_path"]: l for l in _img_resp.json().get("logos", [])}
