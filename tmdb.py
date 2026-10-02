@@ -581,6 +581,40 @@ async def fetch_poster_metadata(
     logos     = images.get("logos", [])
     backdrops = images.get("backdrops", [])
 
+    # TMDB bug (reproduced live on a freshly-added, zero-vote logo): the
+    # append_to_response=images sub-resource sometimes serves an image with its
+    # iso_639_1/iso_3166_1 stripped to null, while the dedicated .../images
+    # endpoint correctly reports its real language+country for the SAME
+    # file_path. That silently dumps a genuine native-language logo into the
+    # untagged bucket and we fall back to English. Only worth the extra TMDB
+    # call when the requested language bucket came up empty AND there's a
+    # suspicious zero-vote null/null entry that could be the mistagged one.
+    _req_country = _REQUIRED_LOGO_COUNTRY.get(logo_language)
+    _lang_matched = (
+        logo_language in (None, "", "en")
+        or any(_logo_lang_matches(l, logo_language) for l in logos)
+    )
+    _suspect = any(
+        l.get("iso_639_1") in (None, "") and l.get("iso_3166_1") in (None, "")
+        and not l.get("vote_count")
+        for l in logos
+    )
+    if not _lang_matched and _suspect:
+        try:
+            _img_resp = await client.get(
+                f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}/images",
+                params={"api_key": tmdb_key, "include_image_language": _img_langs},
+            )
+            if _img_resp.status_code == 200:
+                _real_logos = {l["file_path"]: l for l in _img_resp.json().get("logos", [])}
+                for l in logos:
+                    _real = _real_logos.get(l.get("file_path"))
+                    if _real:
+                        l["iso_639_1"] = _real.get("iso_639_1")
+                        l["iso_3166_1"] = _real.get("iso_3166_1")
+        except Exception as exc:
+            logger.warning(f"Logo re-tag fallback failed for {tmdb_id}: {exc}")
+
     # iso_639_1 is None (JSON null) for most textless entries;
     # older TMDB records occasionally use "" (empty string) for the same thing.
     textless = [p for p in posters if p.get("iso_639_1") in (None, "")]
