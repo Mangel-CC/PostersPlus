@@ -25,6 +25,7 @@ import psycopg
 from psycopg_pool import ConnectionPool
 
 import blobstore
+from logo_quality import logos_usable
 from config import (
     DATABASE_URL,
     DB_POOL_MIN_SIZE,
@@ -39,6 +40,8 @@ from config import (
     TMDB_LOGO_CACHE_DURATION,
     TMDB_METADATA_CACHE_DURATION,
     TMDB_METADATA_AIRING_CACHE_DURATION,
+    TMDB_METADATA_BAD_LOGO_CACHE_DURATION,
+    COMPOSITE_BAD_LOGO_TTL,
     COMPOSITE_CACHE_TTL,
     COMPOSITE_MAX_ENTRIES,
     QUALITY_OLD_CACHE_DURATION,
@@ -318,7 +321,7 @@ def get_cached_final_poster_url(cache_key: str) -> str | None:
     return blobstore.url_for(blobstore.BUCKET_COMPOSITES, cache_key)
 
 
-async def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes) -> None:
+async def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes, short_ttl: bool = False) -> None:
     try:
         # Write bytes first so the metadata row is never present without
         # a backing blob.
@@ -335,7 +338,7 @@ async def set_cached_final_poster(cache_key: str, jpeg_bytes: bytes) -> None:
                     ON CONFLICT (cache_key) DO UPDATE SET
                         cached_at  = EXCLUDED.cached_at
                     """,
-                    (cache_key, int(time.time())),
+                    (cache_key, int(time.time()) - (max(0, COMPOSITE_CACHE_TTL - COMPOSITE_BAD_LOGO_TTL) if short_ttl else 0)),
                 )
                 evict_keys: list[str] = []
                 if COMPOSITE_MAX_ENTRIES > 0:
@@ -737,6 +740,8 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
                     and TMDB_METADATA_AIRING_CACHE_DURATION > 0
                 ):
                     _ttl = min(_ttl, TMDB_METADATA_AIRING_CACHE_DURATION)
+                if not logos_usable(json.loads(logos_json or "[]")):
+                    _ttl = min(_ttl, TMDB_METADATA_BAD_LOGO_CACHE_DURATION)
                 if age_days > _ttl:
                     logger.info(f"TMDB metadata cache expired for {cache_key} ({age_days:.1f}d old)")
                     cur.execute(

@@ -216,6 +216,11 @@ TMDB_METADATA_CACHE_DURATION = 7    # re-check textless status / logos weekly
 TMDB_METADATA_AIRING_CACHE_DURATION = float(
     os.environ.get("TMDB_METADATA_AIRING_CACHE_DURATION", "1")
 )
+# Ficha de TMDB (y poster compuesto) cuyo logo no es usable (solo idiomas ilegibles o ninguno,
+# ver logo_quality.py): cache corta para recoger el logo en cuanto aparezca en TMDB.
+BAD_LOGO_CACHE_MINUTES = float(os.environ.get("BAD_LOGO_CACHE_MINUTES", "30"))
+TMDB_METADATA_BAD_LOGO_CACHE_DURATION = BAD_LOGO_CACHE_MINUTES / 1440.0   # en dias
+COMPOSITE_BAD_LOGO_TTL = int(BAD_LOGO_CACHE_MINUTES * 60)                  # en segundos
 DAYS_CONSIDERED_NEW          = 14
 NEW_CACHE_DURATION           = 1
 OLD_CACHE_DURATION           = 14

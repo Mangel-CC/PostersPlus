@@ -85,9 +85,10 @@ async def is_cached_final_poster_fresh(cache_key) -> bool:
     return fresh
 
 
-async def set_cached_final_poster(cache_key, jpeg_bytes):
-    """Async pass-through to the storage backend's blobstore-aware writer."""
-    await _raw_set_final_poster(cache_key, jpeg_bytes)
+async def set_cached_final_poster(cache_key, jpeg_bytes, short_ttl=False):
+    """Async pass-through to the storage backend's blobstore-aware writer.
+    short_ttl: el poster se armo con un logo no usable (ver logo_quality.py)."""
+    await _raw_set_final_poster(cache_key, jpeg_bytes, short_ttl)
 
 
 # --- Sync lookups ----------------------------------------------------------

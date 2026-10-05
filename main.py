@@ -562,6 +562,7 @@ from quality import (
     render_badges_left,
 )
 from ratings import calculate_weighted_score, draw_score_bar, fetch_rating, draw_score_bar_vertical, _draw_solid_pip, draw_frosted_bar, _score_color, _score_color_alt, _score_color_metal
+from logo_quality import logos_usable
 from tmdb import es_display_title, ensure_light_logo, fetch_fanart_background_url, composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
 from presets import get_preset, preset_names, preset_catalog
 
@@ -3137,7 +3138,7 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
             _render_semaphore.release()
 
         if will_persist:
-            await set_cached_final_poster(final_cache_key, img_bytes)
+            await set_cached_final_poster(final_cache_key, img_bytes, short_ttl=not logos_usable(logos))
             logger.info(f"Preset {preset} rendered + cached {final_cache_key}")
             if _render_fut is not None and not _render_fut.done():
                 _render_fut.set_result(img_bytes)
@@ -4255,7 +4256,7 @@ async def get_poster(
         #                            would evaluate False without this separate flag
         if (final_cache_key is not None and not quality_pending and not _detection_deferred
                 and not rating_failed and not _rating_backoff_active):
-            await set_cached_final_poster(final_cache_key, img_bytes)
+            await set_cached_final_poster(final_cache_key, img_bytes, short_ttl=not logos_usable(logos))
             logger.info(f"Final poster cached for {final_cache_key}")
 
         if _render_fut is not None:
