@@ -33,7 +33,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 import blobstore
-from logo_quality import logos_usable
+from logo_quality import logos_usable, is_pre_release
 from config import (
     DB_PATH,
     DAYS_CONSIDERED_NEW,
@@ -1080,7 +1080,7 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
             and TMDB_METADATA_AIRING_CACHE_DURATION > 0
         ):
             _ttl = min(_ttl, TMDB_METADATA_AIRING_CACHE_DURATION)
-        if not logos_usable(json.loads(logos_json or "[]")):
+        if not logos_usable(json.loads(logos_json or "[]")) or is_pre_release(tmdb_status):
             _ttl = min(_ttl, TMDB_METADATA_BAD_LOGO_CACHE_DURATION)
         if age_days > _ttl:
             logger.info(f"TMDB metadata cache expired for {cache_key} ({age_days:.1f}d old)")
@@ -1276,7 +1276,8 @@ def get_cached_release_status(cache_key: str) -> str | None:
             return None
         status, cached_at = row
         age_days = (time.time() - cached_at) / 86400
-        if age_days > _RELEASE_STATUS_TTL_DAYS:
+        ttl_days = TMDB_METADATA_BAD_LOGO_CACHE_DURATION if status == "Production" else _RELEASE_STATUS_TTL_DAYS
+        if age_days > ttl_days:
             logger.info(f"Release status cache expired for {cache_key} ({age_days:.1f}d old)")
             return None
         return status

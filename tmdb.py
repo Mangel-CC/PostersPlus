@@ -1635,7 +1635,11 @@ async def fetch_release_status(
                     "Returning" | "Ended" | "Cancelled" | None.
     """
     cache_key = f"{media_type}_{tmdb_id}"
-    cached = get_cached_release_status(cache_key)
+    # Series: el estado se deriva del campo "status" que ya viene en la ficha (sin llamada extra),
+    # asi que cachearlo aparte solo servia para dejar pegado "En Produccion" una semana despues
+    # del estreno (Overgeared, 100 h). Peliculas: la cache de abajo sigue, pero "Production"
+    # vence pronto (ver get_cached_release_status).
+    cached = None if media_type in ("tv", "series") else get_cached_release_status(cache_key)
     if cached:
         return cached
 

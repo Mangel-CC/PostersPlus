@@ -8,6 +8,15 @@ con ella se cachean poco tiempo para recoger el logo correcto en cuanto alguien 
 
 USABLE_LOGO_LANGS = (None, "", "en", "es")
 
+# Estados de TMDB de algo que todavia no sale: el sash "En Produccion" / "Proximamente" depende de
+# ellos y deja de ser cierto el dia del estreno, asi que ficha, estado y posters armados con ellos
+# se cachean poco (ver BAD_LOGO_CACHE_MINUTES en config.py).
+PRE_RELEASE_TMDB_STATUSES = ("In Production", "Planned", "Pilot", "Post Production", "Rumored")
+
+
+def is_pre_release(tmdb_status) -> bool:
+    return tmdb_status in PRE_RELEASE_TMDB_STATUSES
+
 
 def logos_usable(logos) -> bool:
     return any((lg or {}).get("iso_639_1") in USABLE_LOGO_LANGS for lg in (logos or []))
