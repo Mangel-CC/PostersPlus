@@ -1456,9 +1456,9 @@ def draw_award_badge(
 
     if sash_type == "premiere":
         # ── Estreno / Nueva temporada: color propio en cualquier estilo, para que destaque ──
-        # Degradado rojo -> naranja, borde claro y texto blanco con ▶ delante. Ignora notch_style y
+        # Degradado rojo -> naranja, borde claro y texto blanco con ★ delante. Ignora notch_style y
         # tint_rgb a proposito: el chiste es que NO se parezca al resto de los sashes.
-        label_p = f"\u25b6  {label}"
+        label_p = f"\u2605  {label}"
         _tb = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox((0, 0), label_p, font=font)
         badge_w = max(min_badge_w, min(max_badge_w, (_tb[2] - _tb[0]) // SS + _h_pad))
         bw = badge_w * SS
