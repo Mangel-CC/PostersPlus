@@ -4076,9 +4076,10 @@ async def get_poster(
             # dice "Estreno" / "Estreno doble" / "Nueva temporada" (ver episode_sash_label).
             _le = (tmdb_data or {}).get("last_episode") or {}
             _season_air = _le.get("season_air_date") if int(_le.get("season") or 0) == int(season) else None
-            # El cap. 1 ES el estreno; para el 2, se toma como doble estreno solo si la temporada empezó
-            # hoy o ayer (si no, salió después y va como T{s}E2).
-            _ep_air = (_season_air if int(episode) == 1 else _cfg.local_today().isoformat()) if _season_air else None
+            # El cap. 1 ES el estreno; los que salieron junto con él (premiere_batch, del detalle de la
+            # temporada: 2 = estreno doble) también. Cualquier otro salió después y va como T{s}E{e}.
+            _batch = int(_le.get("premiere_batch") or 1) if _season_air else 1
+            _ep_air = (_season_air if int(episode) <= max(1, _batch) else _cfg.local_today().isoformat()) if _season_air else None
             discovery_meta.last_episode_label, discovery_meta.last_episode_premiere = episode_sash_info(
                 season, episode, rcfg.episode_format, _ep_air, _season_air)
 

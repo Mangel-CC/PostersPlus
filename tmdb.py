@@ -785,7 +785,11 @@ async def fetch_poster_metadata(
                 if _ad <= _limit:
                     _aired.append((int(_ep.get("episode_number") or 0), _ad, _ep.get("id")))
             if _aired:
-                _season_detail_premiere = min(a[1] for a in _aired).isoformat()
+                _first = min(a[1] for a in _aired)
+                _season_detail_premiere = _first.isoformat()
+                # Cuántos capítulos salieron juntos en el estreno (mismo día o el siguiente): 2 = estreno
+                # doble. Lo usa el catálogo que manda el episodio exacto (episode_authoritative).
+                last_episode["premiere_batch"] = sum(1 for a in _aired if (a[1] - _first).days <= 1)
                 _best = max(_aired)
                 if _best[0] > int(last_episode.get("episode") or 0):
                     last_episode.update({
@@ -812,7 +816,7 @@ async def fetch_poster_metadata(
         last_episode.pop("_id", None)
         # Marca de version: las filas cacheadas sin ella se refrescan una vez (ver sqlite_backend).
         last_episode["numbering"] = "group" if _season_air_override else "default"
-        last_episode["rev"] = 2   # 2 = con el detalle de temporada para estrenos recientes
+        last_episode["rev"] = 3   # 3 = con el detalle de temporada y premiere_batch para estrenos recientes
 
     # Season premiere date of the latest episode's season — lets the sash say
     # "Estreno" / "Nueva temporada" / "Estreno doble" instead of "T1E1"/"T1E2"
