@@ -527,10 +527,8 @@ def extract_discovery_meta(
         last_ep = tmdb_data.get("last_episode") or {}
         s, e = last_ep.get("season"), last_ep.get("episode")
         if s and e and _within_days(last_ep.get("air_date"), episode_max_age_days):
-            try:
-                meta.last_episode_label = episode_format.format(s=s, e=e)
-            except (KeyError, IndexError, ValueError):
-                meta.last_episode_label = f"S{s}E{e}"
+            meta.last_episode_label = episode_sash_label(
+                s, e, episode_format, last_ep.get("air_date"), last_ep.get("season_air_date"))
 
     return meta
 
@@ -538,6 +536,39 @@ def extract_discovery_meta(
 # ---------------------------------------------------------------------------
 # Priority picker
 # ---------------------------------------------------------------------------
+
+def episode_sash_label(season, episode, episode_format, ep_air_date=None, season_air_date=None):
+    """Etiqueta del sash de episodio. Cuando el episodio es el arranque de la temporada (salió el mismo
+    día que la temporada, o al día siguiente — el anime se fecha en Japón), dice qué es en vez de "T1E1":
+
+        T1, cap. 1        -> "Estreno"            (en inglés: "Premiere")
+        T1, caps. 1 y 2   -> "Doble estreno"      ("Double Premiere")
+        T2+, cap. 1       -> "Nueva temporada"    ("New Season")
+        T2+, caps. 1 y 2  -> "Doble estreno T2"   ("S2 Double Premiere")
+
+    El idioma sale del formato configurado: "T{s}E{e}" es español. Fuera del estreno, el formato tal cual.
+    """
+    s, e = int(season), int(episode)
+    spanish = (episode_format or "").strip().upper().startswith("T")
+    gap = None
+    try:
+        if ep_air_date and season_air_date:
+            gap = (date.fromisoformat(str(ep_air_date)[:10]) - date.fromisoformat(str(season_air_date)[:10])).days
+    except (ValueError, TypeError):
+        gap = None
+    if gap is not None and -1 <= gap <= 1 and e <= 3:
+        if e == 2:
+            if s == 1:
+                return "Doble estreno" if spanish else "Double Premiere"
+            return f"Doble estreno T{s}" if spanish else f"S{s} Double Premiere"
+        if s == 1:
+            return "Estreno" if spanish else "Premiere"
+        return "Nueva temporada" if spanish else "New Season"
+    try:
+        return episode_format.format(s=s, e=e)
+    except (KeyError, IndexError, ValueError, AttributeError):
+        return f"S{s}E{e}"
+
 
 def pick_sash(
     meta: DiscoveryMeta,

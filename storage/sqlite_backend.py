@@ -1095,7 +1095,13 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
         # was added were migrated with NULL. Refresh once so detection has
         # complete title aliases and episode/anime data. Fresh writes store
         # "{}" / "[]" sentinels so this never loops.
-        if vote_count is None or original_title is None or last_episode_json is None:
+        _needs_season_date = False
+        try:
+            _le = json.loads(last_episode_json) if last_episode_json else {}
+            _needs_season_date = bool(_le.get("season")) and "season_air_date" not in _le
+        except (ValueError, TypeError, AttributeError):
+            pass
+        if vote_count is None or original_title is None or last_episode_json is None or _needs_season_date:
             logger.info(
                 f"TMDB metadata cache missing vote_count, original_title or last_episode for {cache_key}; refreshing"
             )

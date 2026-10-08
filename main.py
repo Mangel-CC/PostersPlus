@@ -549,6 +549,7 @@ from discovery import (
     ALL_PRIORITY_SLOTS,
     FESTIVAL_KEYWORDS,
     DiscoveryMeta,
+    episode_sash_label,
     extract_discovery_meta,
     pick_sash,
 )
@@ -4067,10 +4068,15 @@ async def get_poster(
         # the real latest episode (incl. double/early releases TMDB hasn't registered).
         if (rcfg.episode_authoritative and type in ("series", "tv")
                 and season and episode):
-            try:
-                discovery_meta.last_episode_label = rcfg.episode_format.format(s=season, e=episode)
-            except (KeyError, IndexError, ValueError):
-                discovery_meta.last_episode_label = f"S{season}E{episode}"
+            # Si TMDB sabe cuándo empezó esa temporada y el estreno fue hace poco, el catálogo también
+            # dice "Estreno" / "Doble estreno" / "Nueva temporada" (ver episode_sash_label).
+            _le = (tmdb_data or {}).get("last_episode") or {}
+            _season_air = _le.get("season_air_date") if int(_le.get("season") or 0) == int(season) else None
+            # El cap. 1 ES el estreno; para el 2, se toma como doble estreno solo si la temporada empezó
+            # hoy o ayer (si no, salió después y va como T{s}E2).
+            _ep_air = (_season_air if int(episode) == 1 else _cfg.local_today().isoformat()) if _season_air else None
+            discovery_meta.last_episode_label = episode_sash_label(
+                season, episode, rcfg.episode_format, _ep_air, _season_air)
 
         # ------------------------------------------------------------------
         # Release-based quality fallback — when the quality source returned

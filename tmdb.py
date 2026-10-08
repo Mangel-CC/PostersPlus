@@ -720,6 +720,17 @@ async def fetch_poster_metadata(
                     "air_date": _eff_air,
                 }
 
+    # Season premiere date of the latest episode's season — lets the sash say
+    # "Estreno" / "Nueva temporada" / "Doble estreno" instead of "T1E1"/"T1E2"
+    # when the latest episode is the season opener (or the 2nd of a double
+    # premiere, aired the same day). Always written (None when unknown) so the
+    # cache-migration check below doesn't loop.
+    if last_episode:
+        _season_no = int(last_episode.get("season") or 0)
+        _season = next((x for x in (data.get("seasons") or [])
+                        if int(x.get("season_number") or -1) == _season_no), None)
+        last_episode["season_air_date"] = (_season or {}).get("air_date")
+
     # Origin country — used with genre 16 (Animation) + original_language "ja"
     # for anime detection. TMDB returns it for both movies and TV.
     origin_country: list[str] = data.get("origin_country") or []
