@@ -1035,6 +1035,10 @@ def build_request_config(params: dict) -> RequestConfig:
     cfg.fallback_to_imdb = _b("fallback_to_imdb", cfg.fallback_to_imdb)
 
     cfg.logo_language        = (params.get("logo_language", cfg.logo_language).strip().lower())
+    # Sin episode_format explicito, el sash de episodio sigue el idioma: en español "T1E5", y con eso
+    # tambien "Estreno"/"Nueva temporada" en vez de "Premiere"/"New Season" (ver episode_sash_info).
+    if not (params.get("episode_format") or "").strip() and cfg.logo_language.startswith("es"):
+        cfg.episode_format = "T{s}E{e}"
     _lp = params.get("logo_priority")
     if _lp in (
         "native_original",
