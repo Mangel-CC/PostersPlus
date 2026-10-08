@@ -756,6 +756,44 @@ async def fetch_poster_metadata(
                     "_id":      _next_ep_raw.get("id"),
                 }
 
+    # Temporada recién estrenada: los campos last/next_episode_to_air de la serie llegan a ir atrasados
+    # respecto al detalle de la temporada (Magical Explorer: la serie decía "cap. 1 el 4, cap. 2 el 11"
+    # mientras la temporada ya tenía 1 y 2 el día 3 — un doble estreno). Si la temporada del último
+    # episodio empezó hace <= 14 días, se lee su detalle y se toma el último capítulo ya emitido.
+    _season_detail_premiere = None
+    if last_episode and endpoint == "tv":
+        _sn = int(last_episode.get("season") or 0)
+        _sd = next((x for x in (data.get("seasons") or []) if int(x.get("season_number") or -1) == _sn), None)
+        try:
+            _start = _date.fromisoformat(((_sd or {}).get("air_date") or "")[:10])
+        except (ValueError, TypeError):
+            _start = None
+        if _start is not None and (local_today() - _start).days <= 14:
+            try:
+                _sr = await client.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}/season/{_sn}", params={"api_key": tmdb_key})
+                _eps = _sr.json().get("episodes", []) if _sr.status_code == 200 else []
+            except Exception as exc:
+                _eps = []
+                logger.warning(f"Season detail fetch failed for {tmdb_id} S{_sn}: {exc}")
+            _limit = local_today() + _timedelta(days=1)   # misma tolerancia de Japón que arriba
+            _aired = []
+            for _ep in _eps:
+                try:
+                    _ad = _date.fromisoformat((_ep.get("air_date") or "")[:10])
+                except (ValueError, TypeError):
+                    continue
+                if _ad <= _limit:
+                    _aired.append((int(_ep.get("episode_number") or 0), _ad, _ep.get("id")))
+            if _aired:
+                _season_detail_premiere = min(a[1] for a in _aired).isoformat()
+                _best = max(_aired)
+                if _best[0] > int(last_episode.get("episode") or 0):
+                    last_episode.update({
+                        "episode": _best[0],
+                        "air_date": min(_best[1], local_today()).isoformat(),
+                        "_id": _best[2],
+                    })
+
     # Numeración absoluta (Re:Zero: TMDB pone los 85 capítulos en una sola "temporada 1"). Si la serie
     # tiene UNA sola temporada regular y TMDB ofrece un grupo de episodios por temporadas ("Seasons",
     # "Temporadas", "Crunchyroll"...), el sash usa ese grupo: T4E19 en vez de T1E85. Las series con
@@ -774,6 +812,7 @@ async def fetch_poster_metadata(
         last_episode.pop("_id", None)
         # Marca de version: las filas cacheadas sin ella se refrescan una vez (ver sqlite_backend).
         last_episode["numbering"] = "group" if _season_air_override else "default"
+        last_episode["rev"] = 2   # 2 = con el detalle de temporada para estrenos recientes
 
     # Season premiere date of the latest episode's season — lets the sash say
     # "Estreno" / "Nueva temporada" / "Doble estreno" instead of "T1E1"/"T1E2"
@@ -784,7 +823,7 @@ async def fetch_poster_metadata(
         _season_no = int(last_episode.get("season") or 0)
         _season = next((x for x in (data.get("seasons") or [])
                         if int(x.get("season_number") or -1) == _season_no), None)
-        last_episode["season_air_date"] = _season_air_override or (_season or {}).get("air_date")
+        last_episode["season_air_date"] = _season_air_override or _season_detail_premiere or (_season or {}).get("air_date")
 
     # Origin country — used with genre 16 (Animation) + original_language "ja"
     # for anime detection. TMDB returns it for both movies and TV.
