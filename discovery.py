@@ -550,7 +550,7 @@ def episode_sash_info(season, episode, episode_format, ep_air_date=None, season_
 
         T1, cap. 1        -> "Estreno"            (en inglés: "Premiere")
         T1, caps. 1 y 2   -> "Doble estreno"      ("Double Premiere")
-        T2+, cap. 1       -> "Nueva temporada"    ("New Season")
+        T2+, cap. 1       -> "Nueva temporada T2" ("New Season S2")
         T2+, caps. 1 y 2  -> "Doble estreno T2"   ("S2 Double Premiere")
 
     El idioma sale del formato configurado: "T{s}E{e}" es español. Fuera del estreno, el formato tal cual.
@@ -570,7 +570,7 @@ def episode_sash_info(season, episode, episode_format, ep_air_date=None, season_
             return (f"Doble estreno T{s}" if spanish else f"S{s} Double Premiere"), True
         if s == 1:
             return ("Estreno" if spanish else "Premiere"), True
-        return ("Nueva temporada" if spanish else "New Season"), True
+        return (f"Nueva temporada T{s}" if spanish else f"New Season S{s}"), True
     try:
         return episode_format.format(s=s, e=e), False
     except (KeyError, IndexError, ValueError, AttributeError):
