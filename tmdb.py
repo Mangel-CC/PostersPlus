@@ -815,7 +815,7 @@ async def fetch_poster_metadata(
         last_episode["rev"] = 2   # 2 = con el detalle de temporada para estrenos recientes
 
     # Season premiere date of the latest episode's season — lets the sash say
-    # "Estreno" / "Nueva temporada" / "Doble estreno" instead of "T1E1"/"T1E2"
+    # "Estreno" / "Nueva temporada" / "Estreno doble" instead of "T1E1"/"T1E2"
     # when the latest episode is the season opener (or the 2nd of a double
     # premiere, aired the same day). Always written (None when unknown) so the
     # cache-migration check below doesn't loop.

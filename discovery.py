@@ -549,9 +549,9 @@ def episode_sash_info(season, episode, episode_format, ep_air_date=None, season_
     día que la temporada, o al día siguiente — el anime se fecha en Japón), dice qué es en vez de "T1E1":
 
         T1, cap. 1        -> "Estreno"            (en inglés: "Premiere")
-        T1, caps. 1 y 2   -> "Doble estreno"      ("Double Premiere")
+        T1, caps. 1 y 2   -> "Estreno doble"      ("Double Premiere")
         T2+, cap. 1       -> "Nueva temporada T2" ("New Season S2")
-        T2+, caps. 1 y 2  -> "Doble estreno T2"   ("S2 Double Premiere")
+        T2+, caps. 1 y 2  -> "Estreno doble T2"   ("S2 Double Premiere")
 
     El idioma sale del formato configurado: "T{s}E{e}" es español. Fuera del estreno, el formato tal cual.
     """
@@ -566,8 +566,8 @@ def episode_sash_info(season, episode, episode_format, ep_air_date=None, season_
     if gap is not None and -1 <= gap <= 1 and e <= 3:
         if e == 2:
             if s == 1:
-                return ("Doble estreno" if spanish else "Double Premiere"), True
-            return (f"Doble estreno T{s}" if spanish else f"S{s} Double Premiere"), True
+                return ("Estreno doble" if spanish else "Double Premiere"), True
+            return (f"Estreno doble T{s}" if spanish else f"S{s} Double Premiere"), True
         if s == 1:
             return ("Estreno" if spanish else "Premiere"), True
         return (f"Nueva temporada T{s}" if spanish else f"New Season S{s}"), True

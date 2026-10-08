@@ -4073,7 +4073,7 @@ async def get_poster(
         if (rcfg.episode_authoritative and type in ("series", "tv")
                 and season and episode):
             # Si TMDB sabe cuándo empezó esa temporada y el estreno fue hace poco, el catálogo también
-            # dice "Estreno" / "Doble estreno" / "Nueva temporada" (ver episode_sash_label).
+            # dice "Estreno" / "Estreno doble" / "Nueva temporada" (ver episode_sash_label).
             _le = (tmdb_data or {}).get("last_episode") or {}
             _season_air = _le.get("season_air_date") if int(_le.get("season") or 0) == int(season) else None
             # El cap. 1 ES el estreno; para el 2, se toma como doble estreno solo si la temporada empezó
