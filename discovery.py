@@ -381,6 +381,9 @@ class DiscoveryMeta:
     # New-episode sash (TV/anime) — label like "S2E5" when the latest episode
     # aired within the configured window; None otherwise.
     last_episode_label: str | None = None
+    # El ultimo episodio es el arranque de la temporada ("Estreno", "Nueva temporada"...): el sash
+    # se dibuja con su propio color para que destaque (sash_type "premiere").
+    last_episode_premiere: bool = False
 
     # Anime detection: genre Animation + Japanese origin. Drives the dedicated
     # "anime" sash palette and optional MAL rating boost.
@@ -527,7 +530,7 @@ def extract_discovery_meta(
         last_ep = tmdb_data.get("last_episode") or {}
         s, e = last_ep.get("season"), last_ep.get("episode")
         if s and e and _within_days(last_ep.get("air_date"), episode_max_age_days):
-            meta.last_episode_label = episode_sash_label(
+            meta.last_episode_label, meta.last_episode_premiere = episode_sash_info(
                 s, e, episode_format, last_ep.get("air_date"), last_ep.get("season_air_date"))
 
     return meta
@@ -538,6 +541,10 @@ def extract_discovery_meta(
 # ---------------------------------------------------------------------------
 
 def episode_sash_label(season, episode, episode_format, ep_air_date=None, season_air_date=None):
+    return episode_sash_info(season, episode, episode_format, ep_air_date, season_air_date)[0]
+
+
+def episode_sash_info(season, episode, episode_format, ep_air_date=None, season_air_date=None):
     """Etiqueta del sash de episodio. Cuando el episodio es el arranque de la temporada (salió el mismo
     día que la temporada, o al día siguiente — el anime se fecha en Japón), dice qué es en vez de "T1E1":
 
@@ -559,15 +566,15 @@ def episode_sash_label(season, episode, episode_format, ep_air_date=None, season
     if gap is not None and -1 <= gap <= 1 and e <= 3:
         if e == 2:
             if s == 1:
-                return "Doble estreno" if spanish else "Double Premiere"
-            return f"Doble estreno T{s}" if spanish else f"S{s} Double Premiere"
+                return ("Doble estreno" if spanish else "Double Premiere"), True
+            return (f"Doble estreno T{s}" if spanish else f"S{s} Double Premiere"), True
         if s == 1:
-            return "Estreno" if spanish else "Premiere"
-        return "Nueva temporada" if spanish else "New Season"
+            return ("Estreno" if spanish else "Premiere"), True
+        return ("Nueva temporada" if spanish else "New Season"), True
     try:
-        return episode_format.format(s=s, e=e)
+        return episode_format.format(s=s, e=e), False
     except (KeyError, IndexError, ValueError, AttributeError):
-        return f"S{s}E{e}"
+        return f"S{s}E{e}", False
 
 
 def pick_sash(
@@ -587,6 +594,8 @@ def pick_sash(
             # awards or prestige credits.
             if meta.is_anime and slot in ("new_episode", "foreign"):
                 sash_type = "anime"
+            if slot == "new_episode" and meta.last_episode_premiere:
+                sash_type = "premiere"
             return result, sash_type
     return None
 

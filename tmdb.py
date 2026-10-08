@@ -485,6 +485,40 @@ def _select_textless_poster(posters: list[dict]) -> dict | None:
     )
 
 
+_EPISODE_GROUP_TYPES = (6, 1, 7, 4)   # Production, Original air date, TV, Digital (en ese orden)
+_SEASONISH = re.compile(r"season|temporada|crunchyroll|netflix|seasons", re.IGNORECASE)
+_NOT_SEASONS = re.compile(r"director|cut|arc|absolute|specials?$", re.IGNORECASE)
+
+
+async def _absolute_to_group_season(client, tmdb_id, tmdb_key, episode_id):
+    """(temporada, episodio, fecha de inicio de la temporada) del episodio `episode_id` según el grupo
+    de episodios "por temporadas" de TMDB, o None si la serie no tiene uno usable."""
+    r = await client.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}/episode_groups", params={"api_key": tmdb_key})
+    if r.status_code != 200:
+        return None
+    groups = [g for g in r.json().get("results", [])
+              if g.get("type") in _EPISODE_GROUP_TYPES and g.get("group_count", 0) >= 2 and g.get("episode_count", 0) > 0
+              and _SEASONISH.search(g.get("name") or "") and not _NOT_SEASONS.search(g.get("name") or "")]
+    groups.sort(key=lambda g: (_EPISODE_GROUP_TYPES.index(g["type"]), -g.get("episode_count", 0)))
+    for g in groups[:2]:
+        d = await client.get(f"https://api.themoviedb.org/3/tv/episode_group/{g['id']}", params={"api_key": tmdb_key})
+        if d.status_code != 200:
+            continue
+        for sub in d.json().get("groups", []):
+            name = sub.get("name") or ""
+            if int(sub.get("order") or 0) == 0 or re.search(r"special|especial", name, re.IGNORECASE):
+                continue
+            eps = sub.get("episodes") or []
+            for e in eps:
+                if e.get("id") == episode_id:
+                    m = re.search(r"(\d+)", name)
+                    season = int(m.group(1)) if m else int(sub.get("order"))
+                    dates = sorted(x.get("air_date") for x in eps if x.get("air_date"))
+                    logger.info(f"Episode group '{g.get('name')}' maps {tmdb_id} ep {episode_id} -> S{season}E{int(e.get('order', 0)) + 1}")
+                    return season, int(e.get("order", 0)) + 1, (dates[0] if dates else None)
+    return None
+
+
 async def fetch_poster_metadata(
     client: httpx.AsyncClient,
     tmdb_id: str,
@@ -682,6 +716,7 @@ async def fetch_poster_metadata(
             "season":   _last_ep_raw.get("season_number"),
             "episode":  _last_ep_raw.get("episode_number"),
             "air_date": _last_ep_raw.get("air_date"),
+            "_id":      _last_ep_raw.get("id"),
         }
 
     # Premiere-day lag: on the day an episode airs, TMDB often still lists it in
@@ -718,7 +753,27 @@ async def fetch_poster_metadata(
                     "season":   _ns,
                     "episode":  _ne,
                     "air_date": _eff_air,
+                    "_id":      _next_ep_raw.get("id"),
                 }
+
+    # Numeración absoluta (Re:Zero: TMDB pone los 85 capítulos en una sola "temporada 1"). Si la serie
+    # tiene UNA sola temporada regular y TMDB ofrece un grupo de episodios por temporadas ("Seasons",
+    # "Temporadas", "Crunchyroll"...), el sash usa ese grupo: T4E19 en vez de T1E85. Las series con
+    # temporadas normales no se tocan.
+    _season_air_override = None
+    _regular = [x for x in (data.get("seasons") or []) if int(x.get("season_number") or 0) > 0]
+    if last_episode and last_episode.get("_id") and len(_regular) == 1 and endpoint == "tv":
+        try:
+            _mapped = await _absolute_to_group_season(client, tmdb_id, tmdb_key, last_episode["_id"])
+        except Exception as exc:
+            _mapped = None
+            logger.warning(f"Episode-group mapping failed for {tmdb_id}: {exc}")
+        if _mapped:
+            last_episode["season"], last_episode["episode"], _season_air_override = _mapped
+    if last_episode:
+        last_episode.pop("_id", None)
+        # Marca de version: las filas cacheadas sin ella se refrescan una vez (ver sqlite_backend).
+        last_episode["numbering"] = "group" if _season_air_override else "default"
 
     # Season premiere date of the latest episode's season — lets the sash say
     # "Estreno" / "Nueva temporada" / "Doble estreno" instead of "T1E1"/"T1E2"
@@ -729,7 +784,7 @@ async def fetch_poster_metadata(
         _season_no = int(last_episode.get("season") or 0)
         _season = next((x for x in (data.get("seasons") or [])
                         if int(x.get("season_number") or -1) == _season_no), None)
-        last_episode["season_air_date"] = (_season or {}).get("air_date")
+        last_episode["season_air_date"] = _season_air_override or (_season or {}).get("air_date")
 
     # Origin country — used with genre 16 (Animation) + original_language "ja"
     # for anime detection. TMDB returns it for both movies and TV.

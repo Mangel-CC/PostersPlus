@@ -549,7 +549,7 @@ from discovery import (
     ALL_PRIORITY_SLOTS,
     FESTIVAL_KEYWORDS,
     DiscoveryMeta,
-    episode_sash_label,
+    episode_sash_info,
     extract_discovery_meta,
     pick_sash,
 )
@@ -4075,7 +4075,7 @@ async def get_poster(
             # El cap. 1 ES el estreno; para el 2, se toma como doble estreno solo si la temporada empezó
             # hoy o ayer (si no, salió después y va como T{s}E2).
             _ep_air = (_season_air if int(episode) == 1 else _cfg.local_today().isoformat()) if _season_air else None
-            discovery_meta.last_episode_label = episode_sash_label(
+            discovery_meta.last_episode_label, discovery_meta.last_episode_premiere = episode_sash_info(
                 season, episode, rcfg.episode_format, _ep_air, _season_air)
 
         # ------------------------------------------------------------------

@@ -1454,6 +1454,44 @@ def draw_award_badge(
     # Text is geometrically centred; client-specific placement is handled by inset.
     text_cy_ss = bh / 2
 
+    if sash_type == "premiere":
+        # ── Estreno / Nueva temporada: color propio en cualquier estilo, para que destaque ──
+        # Degradado rojo -> naranja, borde claro y texto blanco con ▶ delante. Ignora notch_style y
+        # tint_rgb a proposito: el chiste es que NO se parezca al resto de los sashes.
+        label_p = f"\u25b6  {label}"
+        _tb = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox((0, 0), label_p, font=font)
+        badge_w = max(min_badge_w, min(max_badge_w, (_tb[2] - _tb[0]) // SS + _h_pad))
+        bw = badge_w * SS
+        bx = (width - badge_w) // 2
+        rr_mask_ss = Image.new("L", (bw, bh), 0)
+        ImageDraw.Draw(rr_mask_ss).rounded_rectangle(
+            [(0, 0), (bw - 1, bh - 1)], radius=r_ss, fill=255,
+            corners=(False, False, True, True)
+        )
+        top_c, bot_c = np.array([235, 40, 60], np.float32), np.array([255, 140, 20], np.float32)
+        t = np.linspace(0, 1, bh, dtype=np.float32)[:, None, None]
+        grad = (top_c * (1 - t) + bot_c * t).repeat(bw, axis=1)
+        body = Image.fromarray(np.concatenate([grad, np.full((bh, bw, 1), 245, np.float32)], axis=2).astype(np.uint8), "RGBA")
+        body.putalpha(rr_mask_ss)
+        edge = Image.new("L", (bw, bh), 0)
+        ImageDraw.Draw(edge).rounded_rectangle(
+            [(bw_ss // 2, -bw_ss), (bw - 1 - bw_ss // 2, bh - 1 - bw_ss // 2)], radius=r_ss,
+            outline=255, width=bw_ss, corners=(False, False, True, True)
+        )
+        rim = Image.new("RGBA", (bw, bh), (255, 225, 190, 0))
+        rim.putalpha(Image.fromarray((np.array(edge, np.float32) * 0.85).astype(np.uint8), "L"))
+        badge_ss = Image.alpha_composite(body, rim)
+        txt_layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+        td = ImageDraw.Draw(txt_layer)
+        tx, ty = _text_center(td, label_p, font, bw / 2, text_cy_ss)
+        td.text((tx, ty + SS), label_p, font=font, fill=(90, 0, 10, 140))   # sombra
+        td.text((tx, ty), label_p, font=font, fill=(255, 255, 255, 255))
+        badge_ss = Image.alpha_composite(badge_ss, txt_layer)
+        badge_final = badge_ss.resize((badge_w, badge_h), Image.LANCZOS)
+        result = image.copy()
+        result.alpha_composite(badge_final, (bx, by_composite))
+        return result
+
     if notch_style == "frosted":
         # ── Frosted: blurred poster crop tinted toward the region's dominant colour ──
         # Crop from the actual composite position so the blur matches what's visible
@@ -1719,6 +1757,9 @@ def draw_award_sash(
     elif sash_type == "anime":
         hi, lo        = (225, 95, 155, 255), (160, 50, 105, 255)
         border_colour = (255, 150, 200, 255)
+    elif sash_type == "premiere":
+        hi, lo        = (235, 40, 60, 255), (255, 140, 20, 255)
+        border_colour = (255, 225, 190, 255)
     else:  # "nom"
         hi, lo        = (180, 180, 190, 255), (110, 110, 120, 255)
         border_colour = (192, 192, 200, 255)
