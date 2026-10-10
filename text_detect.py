@@ -302,6 +302,10 @@ def _recognised_title_match(
         aspect = box_width / max(1.0, box_height)
         area_ratio = (box_width * box_height) / image_area
         centre_x = float(box[:, 0].mean()) / max(1, width)
+        # Franja de creditos/copyright pegada al borde inferior (p.ej. "(c) ... Amazon Content
+        # Services LLC", 2 lineas diminutas): nunca es el titulo y sumaba como "lineas centradas".
+        if float(box[:, 1].mean()) / max(1, height) >= 0.96 and area_ratio < 0.02:
+            continue
         title_candidate = aspect >= 1.5 and area_ratio >= _WIDE_MIN_AREA
         centred_candidate = (
             aspect >= _WIDE_MIN_ASPECT
