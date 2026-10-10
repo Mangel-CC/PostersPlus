@@ -490,9 +490,27 @@ _SEASONISH = re.compile(r"season|temporada|crunchyroll|netflix|seasons", re.IGNO
 _NOT_SEASONS = re.compile(r"director|cut|arc|absolute|specials?$", re.IGNORECASE)
 
 
-async def _absolute_to_group_season(client, tmdb_id, tmdb_key, episode_id):
+_GROUP_CACHE: dict = {}   # (tmdb_id, season, episode) -> (ts, resultado): un dia, para no repetir llamadas por poster
+
+
+async def absolute_to_group_season(client, tmdb_id, tmdb_key, season, episode):
+    """Como _absolute_to_group_season pero desde (temporada, episodio) en la numeracion de TMDB:
+    para los catalogos que mandan el episodio exacto (episode_authoritative) con numeracion absoluta
+    (AnimeFLV: The Apothecary Diaries T1E50 -> T3E2). None si no hay grupo usable o no esta ahi."""
+    import time as _time
+    key = (str(tmdb_id), int(season), int(episode))
+    hit = _GROUP_CACHE.get(key)
+    if hit and _time.time() - hit[0] < 86400:
+        return hit[1]
+    res = await _absolute_to_group_season(client, tmdb_id, tmdb_key, None, match=(int(season), int(episode)))
+    _GROUP_CACHE[key] = (_time.time(), res)
+    return res
+
+
+async def _absolute_to_group_season(client, tmdb_id, tmdb_key, episode_id, match=None):
     """(temporada, episodio, fecha de inicio de la temporada) del episodio `episode_id` según el grupo
-    de episodios "por temporadas" de TMDB, o None si la serie no tiene uno usable."""
+    de episodios "por temporadas" de TMDB, o None si la serie no tiene uno usable. Con `match`
+    ((temporada, episodio) de TMDB) se busca por numero en vez de por id."""
     r = await client.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}/episode_groups", params={"api_key": tmdb_key})
     if r.status_code != 200:
         return None
@@ -510,7 +528,8 @@ async def _absolute_to_group_season(client, tmdb_id, tmdb_key, episode_id):
                 continue
             eps = sub.get("episodes") or []
             for e in eps:
-                if e.get("id") == episode_id:
+                if (e.get("id") == episode_id if match is None
+                        else (int(e.get("season_number") or 0), int(e.get("episode_number") or 0)) == match):
                     m = re.search(r"(\d+)", name)
                     season = int(m.group(1)) if m else int(sub.get("order"))
                     dates = sorted(x.get("air_date") for x in eps if x.get("air_date"))

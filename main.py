@@ -4075,6 +4075,18 @@ async def get_poster(
             # Si TMDB sabe cuándo empezó esa temporada y el estreno fue hace poco, el catálogo también
             # dice "Estreno" / "Estreno doble" / "Nueva temporada" (ver episode_sash_label).
             _le = (tmdb_data or {}).get("last_episode") or {}
+            # Numeracion absoluta (como Re:Zero): si TMDB tiene la serie en una sola temporada y la
+            # convertimos con su grupo "Seasons", el catalogo tambien manda T1E<absoluto>
+            # (The Apothecary Diaries T1E50, Tokyo Revengers): se convierte igual (T3E2).
+            if _le.get("numbering") == "group" and int(season) == 1:
+                try:
+                    from tmdb import absolute_to_group_season
+                    _mapped = await absolute_to_group_season(client, tmdb_id, effective_tmdb_key, season, episode)
+                except Exception as exc:
+                    _mapped = None
+                    logger.warning(f"Episode-group mapping (authoritative) failed for {tmdb_id}: {exc}")
+                if _mapped:
+                    season, episode = _mapped[0], _mapped[1]
             _season_air = _le.get("season_air_date") if int(_le.get("season") or 0) == int(season) else None
             # El cap. 1 ES el estreno; los que salieron junto con él (premiere_batch, del detalle de la
             # temporada: 2 = estreno doble) también. Cualquier otro salió después y va como T{s}E{e}.
