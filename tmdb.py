@@ -522,19 +522,37 @@ async def _absolute_to_group_season(client, tmdb_id, tmdb_key, episode_id, match
         d = await client.get(f"https://api.themoviedb.org/3/tv/episode_group/{g['id']}", params={"api_key": tmdb_key})
         if d.status_code != 200:
             continue
+        last_sub = None   # ultima temporada regular del grupo (para capitulos que el grupo aun no tiene)
         for sub in d.json().get("groups", []):
+            if int(sub.get("order") or 0) > 0 and sub.get("episodes") and not re.search(r"special|especial", sub.get("name") or "", re.IGNORECASE):
+                if last_sub is None or int(sub["order"]) > int(last_sub["order"]):
+                    last_sub = sub
             name = sub.get("name") or ""
             if int(sub.get("order") or 0) == 0 or re.search(r"special|especial", name, re.IGNORECASE):
                 continue
             eps = sub.get("episodes") or []
             for e in eps:
-                if (e.get("id") == episode_id if match is None
+                if (e.get("id") == episode_id if episode_id is not None
                         else (int(e.get("season_number") or 0), int(e.get("episode_number") or 0)) == match):
                     m = re.search(r"(\d+)", name)
                     season = int(m.group(1)) if m else int(sub.get("order"))
                     dates = sorted(x.get("air_date") for x in eps if x.get("air_date"))
                     logger.info(f"Episode group '{g.get('name')}' maps {tmdb_id} ep {episode_id} -> S{season}E{int(e.get('order', 0)) + 1}")
                     return season, int(e.get("order", 0)) + 1, (dates[0] if dates else None)
+        # Grupo desactualizado (Tokyo Revengers: su "temporada 4" solo trae el cap. 51 y ya salio el 52):
+        # un capitulo POSTERIOR al ultimo del grupo, de la misma temporada de TMDB y a poca distancia,
+        # sigue en la ultima temporada del grupo.
+        if match and last_sub:
+            eps = last_sub["episodes"]
+            nums = [(int(x.get("season_number") or 0), int(x.get("episode_number") or 0)) for x in eps]
+            first = min(nums)
+            top = max(n for sn, n in nums if sn == first[0])
+            if match[0] == first[0] and top < match[1] <= top + 26:
+                m = re.search(r"(\d+)", last_sub.get("name") or "")
+                season = int(m.group(1)) if m else int(last_sub.get("order"))
+                dates = sorted(x.get("air_date") for x in eps if x.get("air_date"))
+                logger.info(f"Episode group '{g.get('name')}' (desactualizado) extiende {tmdb_id} S{match[0]}E{match[1]} -> S{season}E{match[1] - first[1] + 1}")
+                return season, match[1] - first[1] + 1, (dates[0] if dates else None)
     return None
 
 
@@ -825,7 +843,8 @@ async def fetch_poster_metadata(
     _regular = [x for x in (data.get("seasons") or []) if int(x.get("season_number") or 0) > 0]
     if last_episode and last_episode.get("_id") and len(_regular) == 1 and endpoint == "tv":
         try:
-            _mapped = await _absolute_to_group_season(client, tmdb_id, tmdb_key, last_episode["_id"])
+            _mapped = await _absolute_to_group_season(client, tmdb_id, tmdb_key, last_episode["_id"],
+                                                      match=(int(last_episode.get("season") or 0), int(last_episode.get("episode") or 0)))
         except Exception as exc:
             _mapped = None
             logger.warning(f"Episode-group mapping failed for {tmdb_id}: {exc}")
@@ -835,7 +854,7 @@ async def fetch_poster_metadata(
         last_episode.pop("_id", None)
         # Marca de version: las filas cacheadas sin ella se refrescan una vez (ver sqlite_backend).
         last_episode["numbering"] = "group" if _season_air_override else "default"
-        last_episode["rev"] = 3   # 3 = con el detalle de temporada y premiere_batch para estrenos recientes
+        last_episode["rev"] = 4   # 4 = grupos de temporadas desactualizados se extienden (Tokyo Revengers)
 
     # Season premiere date of the latest episode's season — lets the sash say
     # "Estreno" / "Nueva temporada" / "Estreno doble" instead of "T1E1"/"T1E2"

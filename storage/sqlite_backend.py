@@ -1098,7 +1098,7 @@ def get_cached_tmdb_metadata(cache_key: str) -> dict | None:
         _needs_season_date = False
         try:
             _le = json.loads(last_episode_json) if last_episode_json else {}
-            _needs_season_date = bool(_le.get("season")) and ("season_air_date" not in _le or "numbering" not in _le or _le.get("rev") != 3)
+            _needs_season_date = bool(_le.get("season")) and ("season_air_date" not in _le or "numbering" not in _le or _le.get("rev") != 4)
         except (ValueError, TypeError, AttributeError):
             pass
         if vote_count is None or original_title is None or last_episode_json is None or _needs_season_date:
