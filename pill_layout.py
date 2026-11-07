@@ -35,6 +35,7 @@ BADGE_PAD_X  = 0.020
 BADGE_FONT   = 0.060
 BADGE_GAP    = 0.016
 ITEM_GAP     = 0.030   # separacion minima pastilla <-> badges
+TOP_RANK     = 25      # puestos del top de hoy de TMDB que se muestran en la pastilla
 CENTER_SCALE = 1.18    # badges centrados (sin pastilla) un poco mas grandes
 LABEL_FONT   = 0.076
 LABEL_CY     = 0.896   # centro vertical de "Genero • ★ nota" (fraccion del alto)

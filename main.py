@@ -566,7 +566,7 @@ from ratings import calculate_weighted_score, draw_score_bar, fetch_rating, draw
 from logo_quality import logos_usable, is_pre_release
 from tmdb import es_display_title, ensure_light_logo, fetch_fanart_background_url, composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
 from presets import get_preset, preset_names, preset_catalog
-from pill_layout import build_pill_poster
+from pill_layout import build_pill_poster, TOP_RANK as PILL_TOP_RANK
 
 # ---------------------------------------------------------------------------
 # Persistent HTTP client
@@ -1387,6 +1387,10 @@ def build_poster(
         if (_cinema_grey and "release_status" in _pill_priority):
             _pill_priority = ["release_status"] + [s for s in _pill_priority if s != "release_status"]
         _pill_sash = pick_sash(discovery_meta, _pill_priority) if (discovery_meta is not None and cfg.sash_mode != "hidden") else None
+        # Como btttr: si el titulo esta en el top 25 de hoy de TMDB, su puesto gana a cualquier otro sash.
+        if (discovery_meta is not None and cfg.sash_mode != "hidden" and discovery_meta.trending_rank
+                and discovery_meta.trending_rank <= PILL_TOP_RANK):
+            _pill_sash = (f"#{discovery_meta.trending_rank} Today", "trending")
         _has_score = score not in ("N/A", None)
         if _has_score:
             _sc = int(score)
@@ -4314,7 +4318,10 @@ async def get_poster(
         #                            would evaluate False without this separate flag
         if (final_cache_key is not None and not quality_pending and not _detection_deferred
                 and not rating_failed and not _rating_backoff_active):
-            await set_cached_final_poster(final_cache_key, img_bytes, short_ttl=(not logos_usable(logos) or is_pre_release(tmdb_data.get("tmdb_status"))))
+            # Layout pill con puesto del top: cache corta, el puesto cambia a diario.
+            _rank_shown = (rcfg.layout == "pill" and discovery_meta is not None
+                           and bool(discovery_meta.trending_rank) and discovery_meta.trending_rank <= PILL_TOP_RANK)
+            await set_cached_final_poster(final_cache_key, img_bytes, short_ttl=(not logos_usable(logos) or is_pre_release(tmdb_data.get("tmdb_status")) or _rank_shown))
             logger.info(f"Final poster cached for {final_cache_key}")
 
         if _render_fut is not None:
