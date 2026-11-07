@@ -344,6 +344,20 @@ def _draw_pill(image: Image.Image, text: str, right_limit: int) -> None:
     image.alpha_composite(pill, (x0, y0))
 
 
+def _tab_rgb(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    """La pestaña va sobre el mismo fondo del que sale su color: se separa un poco del fondo
+    (mas saturada y algo mas oscura si es clara, mas clara si es oscura) para que se distinga."""
+    if rgb == DARK_PILL:
+        return rgb
+    h, s, v = colorsys.rgb_to_hsv(*(c / 255 for c in rgb))
+    if v > 0.5:
+        s, v = min(1.0, s * 1.25 + 0.05), v * 0.82
+    else:
+        v = min(1.0, v + 0.14)
+    r, g, b = colorsys.hsv_to_rgb(h, s, v)
+    return int(r * 255), int(g * 255), int(b * 255)
+
+
 def _draw_rank_tab(image: Image.Image, text: str) -> None:
     """Catalogo Top: pestaña centrada pegada al borde superior (solo esquinas de abajo redondeadas)."""
     w, _ = image.size
@@ -352,7 +366,7 @@ def _draw_rank_tab(image: Image.Image, text: str) -> None:
     pw = int(tw + 2 * w * TAB_PAD_X)
     ph = int(w * TAB_H)
     r = int(ph * 0.22)
-    rgb = _accent_rgb(image)
+    rgb = _tab_rgb(_accent_rgb(image))
     big = Image.new("RGBA", (pw * SS, ph * SS), (0, 0, 0, 0))
     ImageDraw.Draw(big).rounded_rectangle((0, -r * SS, pw * SS - 1, ph * SS - 1), radius=r * SS, fill=(*rgb, 255))
     tab = big.resize((pw, ph), Image.LANCZOS)
