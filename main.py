@@ -566,6 +566,7 @@ from ratings import calculate_weighted_score, draw_score_bar, fetch_rating, draw
 from logo_quality import logos_usable, is_pre_release
 from tmdb import es_display_title, ensure_light_logo, fetch_fanart_background_url, composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
 from presets import get_preset, preset_names, preset_catalog
+from pill_layout import build_pill_poster
 
 # ---------------------------------------------------------------------------
 # Persistent HTTP client
@@ -799,6 +800,7 @@ class RequestConfig:
     bottom_gradient: str = "high"   # off | low | medium | high — strength of the bottom vignette
     sash_badge: bool = False              # legacy; superseded by sash_mode (kept for back-compat parsing)
     sash_mode: str = "sash"               # "sash" (diagonal) | "notch"
+    layout: str = "default"               # "default" | "pill" (ver pill_layout.py)
     sash_badge_style:  str   = "frosted" # "silver" | "gold" | "frosted"
     sash_badge_size_w: float = 1.05      # horizontal scale of badge
     sash_badge_size_h: float = 1.05      # vertical scale of badge
@@ -1058,6 +1060,15 @@ def build_request_config(params: dict) -> RequestConfig:
     if _oas in ("primary", "top_rated"):
         cfg.original_art_source = _oas
     cfg.sash_priority        = _parse_sash_priority(params.get("sash_priority"))
+
+    # layout=pill necesita nota, badges de calidad y sash aunque la URL no los pida (los modos
+    # 0/"hidden" harian que no se busquen esos datos).
+    if (params.get("layout") or "").strip().lower() == "pill":
+        cfg.layout = "pill"
+        if cfg.rating_display_mode == 0:
+            cfg.rating_display_mode = 2
+        if cfg.badge_display_mode in (0, 3):
+            cfg.badge_display_mode = 2
 
     return cfg
 
@@ -1369,6 +1380,30 @@ def build_poster(
         genre_label = _genre_tr
     else:
         genre_label = _GENRE_LABEL_OVERRIDES.get(genre, genre)
+
+    # Layout "pill": diseño propio (ver pill_layout.py); no usa gradientes, barra ni sash diagonal.
+    if cfg.layout == "pill":
+        _pill_priority = cfg.sash_priority
+        if (_cinema_grey and "release_status" in _pill_priority):
+            _pill_priority = ["release_status"] + [s for s in _pill_priority if s != "release_status"]
+        _pill_sash = pick_sash(discovery_meta, _pill_priority) if (discovery_meta is not None and cfg.sash_mode != "hidden") else None
+        _has_score = score not in ("N/A", None)
+        if _has_score:
+            _sc = int(score)
+            _score_txt = "10" if _sc >= 100 else f"{_sc / 10:.1f}"
+            _pill_label = f"{genre_label} • ★ {_score_txt}"
+        else:
+            _pill_label = genre_label
+        _pill_tokens = quality_tokens or []
+        return build_pill_poster(
+            image,
+            label=_pill_label,
+            sash_text=translate_sash(_pill_sash[0], cfg.logo_language) if _pill_sash else None,
+            tokens=_pill_tokens,
+            show_badges=bool(_pill_tokens),
+            logo=logo,
+            fallback_title=fallback_title,
+        )
 
     # --- TOP GRADIENT (vectorised) ---
     # Darkens the top of the poster so the age-rating numeral and quality

@@ -51,6 +51,10 @@ def _extract_tokens_from_parsed_file(parsed: dict) -> set[str]:
         tokens.add("ATMOS")
     if "DTS:X" in audio_tags or "DTSX" in audio_tags or "DTS-X" in audio_tags:
         tokens.add("DTSX")
+    if any("TRUEHD" in t for t in audio_tags):
+        tokens.add("TRUEHD")
+    if audio_tags & {"DD+", "DDP", "EAC3", "E-AC3", "DD", "AC3"}:
+        tokens.add("DDP")
 
     return tokens
 
@@ -177,7 +181,7 @@ async def fetch_quality_from_aiostreams(
             if visual in seen:
                 tokens.append(visual)
                 break
-        for audio in ("ATMOS", "DTSX"):
+        for audio in ("ATMOS", "TRUEHD", "DTSX", "DDP"):
             if audio in seen:
                 tokens.append(audio)
                 break
@@ -264,6 +268,10 @@ def _tokens_from_stremio_stream(
         tokens.add("ATMOS")
     if re.search(r'DTS.?X\b', text):
         tokens.add("DTSX")
+    if "TRUEHD" in text:
+        tokens.add("TRUEHD")
+    if re.search(r'\bDDP|\bDD\+|\bE-?AC-?3\b|\bDD[ .]?[257]\.[01]\b|\bAC-?3\b', text):
+        tokens.add("DDP")
 
     return tokens
 
@@ -359,7 +367,7 @@ async def fetch_quality_from_scraper(
             if visual in seen:
                 tokens.append(visual)
                 break
-        for audio in ("ATMOS", "DTSX"):
+        for audio in ("ATMOS", "TRUEHD", "DTSX", "DDP"):
             if audio in seen:
                 tokens.append(audio)
                 break

@@ -403,6 +403,8 @@ QUALITY_LABELS: dict[str, str] = {
     "HDR10":  "HDR10",
     "ATMOS":  "Atmos",
     "DTSX":   "DTS:X",
+    "TRUEHD": "TrueHD",
+    "DDP":    "DD+",
 }
 
 # Normalizes all scores to be out of 100
