@@ -1387,8 +1387,14 @@ def build_poster(
         if (_cinema_grey and "release_status" in _pill_priority):
             _pill_priority = ["release_status"] + [s for s in _pill_priority if s != "release_status"]
         _pill_sash = pick_sash(discovery_meta, _pill_priority) if (discovery_meta is not None and cfg.sash_mode != "hidden") else None
-        # Como btttr: si el titulo esta en el top 25 de hoy de TMDB, su puesto gana a cualquier otro sash.
-        if (discovery_meta is not None and cfg.sash_mode != "hidden" and discovery_meta.trending_rank
+        # Como btttr: si el titulo esta en el top 25 de hoy de TMDB, su puesto gana a premios y demas.
+        # Solo si "trending" esta permitido en sash_priority, y sin pisar el episodio nuevo cuando la URL
+        # lo pone antes (catalogos de episodios recientes).
+        _new_ep_first = ("new_episode" in _pill_priority and
+                         _pill_priority.index("new_episode") < _pill_priority.index("trending")) if "trending" in _pill_priority else False
+        _new_ep = pick_sash(discovery_meta, ["new_episode"]) if (discovery_meta is not None and _new_ep_first) else None
+        if (discovery_meta is not None and cfg.sash_mode != "hidden" and "trending" in _pill_priority
+                and not _new_ep and discovery_meta.trending_rank
                 and discovery_meta.trending_rank <= PILL_TOP_RANK):
             _pill_sash = (f"#{discovery_meta.trending_rank} Today", "trending")
         _has_score = score not in ("N/A", None)
