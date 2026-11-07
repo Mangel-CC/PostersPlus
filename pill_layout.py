@@ -36,7 +36,10 @@ BADGE_FONT   = 0.060
 BADGE_GAP    = 0.016
 ITEM_GAP     = 0.030   # separacion minima pastilla <-> badges
 TOP_RANK     = 25      # puestos del top de hoy de TMDB que se muestran en la pastilla
-CENTER_SCALE = 1.18    # badges centrados (sin pastilla) un poco mas grandes
+CENTER_SCALE = 1.18
+TAB_H        = 0.136   # pestaña del catalogo Top (fraccion del ancho)
+TAB_PAD_X    = 0.072
+TAB_FONT     = 0.080    # badges centrados (sin pastilla) un poco mas grandes
 LABEL_FONT   = 0.076
 LABEL_CY     = 0.896   # centro vertical de "Genero • ★ nota" (fraccion del alto)
 LABEL_COLOR  = (150, 154, 163, 255)
@@ -341,6 +344,22 @@ def _draw_pill(image: Image.Image, text: str, right_limit: int) -> None:
     image.alpha_composite(pill, (x0, y0))
 
 
+def _draw_rank_tab(image: Image.Image, text: str) -> None:
+    """Catalogo Top: pestaña centrada pegada al borde superior (solo esquinas de abajo redondeadas)."""
+    w, _ = image.size
+    font = _font(int(w * TAB_FONT), _PILL_FONT)
+    tw = ImageDraw.Draw(image).textlength(text, font=font)
+    pw = int(tw + 2 * w * TAB_PAD_X)
+    ph = int(w * TAB_H)
+    r = int(ph * 0.22)
+    rgb = _accent_rgb(image)
+    big = Image.new("RGBA", (pw * SS, ph * SS), (0, 0, 0, 0))
+    ImageDraw.Draw(big).rounded_rectangle((0, -r * SS, pw * SS - 1, ph * SS - 1), radius=r * SS, fill=(*rgb, 255))
+    tab = big.resize((pw, ph), Image.LANCZOS)
+    _draw_centered_text(tab, (0, 0, pw, ph), text, font, _text_on(rgb))
+    image.alpha_composite(tab, ((w - pw) // 2, 0))
+
+
 def _draw_label(image: Image.Image, text: str) -> int:
     """Texto inferior centrado. Devuelve la y superior que ocupa (para no pisarlo con el logo)."""
     w, h = image.size
@@ -396,6 +415,7 @@ def build_pill_poster(
     show_badges: bool,
     logo: Image.Image | None,
     fallback_title: str | None,
+    rank_text: str | None = None,
 ) -> Image.Image:
     w, h = image.size
     image = _bottom_fade(image)
@@ -413,6 +433,11 @@ def build_pill_poster(
                        bottom_ratio=bottom_ratio)
     elif fallback_title:
         _draw_title_text(image, fallback_title, label_top - gap)
+
+    if rank_text:
+        # Catalogo Top: solo la pestaña con el puesto, sin badges ni otra pastilla (como btttr).
+        _draw_rank_tab(image, rank_text)
+        return image
 
     badge_cy = int(w * MARGIN) + int(w * PILL_H) // 2
     left_of_badges = w - int(w * MARGIN) + int(w * ITEM_GAP)

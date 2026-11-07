@@ -801,6 +801,7 @@ class RequestConfig:
     sash_badge: bool = False              # legacy; superseded by sash_mode (kept for back-compat parsing)
     sash_mode: str = "sash"               # "sash" (diagonal) | "notch"
     layout: str = "default"               # "default" | "pill" (ver pill_layout.py)
+    top_rank: int = 0                     # layout pill: puesto en un catalogo Top (pestaña "#N Hoy")
     sash_badge_style:  str   = "frosted" # "silver" | "gold" | "frosted"
     sash_badge_size_w: float = 1.05      # horizontal scale of badge
     sash_badge_size_h: float = 1.05      # vertical scale of badge
@@ -1069,6 +1070,10 @@ def build_request_config(params: dict) -> RequestConfig:
             cfg.rating_display_mode = 2
         if cfg.badge_display_mode in (0, 3):
             cfg.badge_display_mode = 2
+        try:
+            cfg.top_rank = max(0, min(100, int(params.get("rank") or 0)))
+        except ValueError:
+            cfg.top_rank = 0
 
     return cfg
 
@@ -1413,6 +1418,7 @@ def build_poster(
             show_badges=bool(_pill_tokens),
             logo=logo,
             fallback_title=fallback_title,
+            rank_text=translate_sash(f"#{cfg.top_rank} Today", cfg.logo_language) if cfg.top_rank else None,
         )
 
     # --- TOP GRADIENT (vectorised) ---
