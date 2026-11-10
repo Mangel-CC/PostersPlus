@@ -2071,6 +2071,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+from outsize import OutputSizeMiddleware
+app.add_middleware(OutputSizeMiddleware)  # ?ow=300: poster ya al tamano de la TV
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _FONTS_DIR = os.path.join(BASE_DIR, "fonts")
 
