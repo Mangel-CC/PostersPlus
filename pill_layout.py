@@ -378,9 +378,9 @@ LAT_GAP = 0.030   # separacion "Genero • ★ nota" <-> badge LAT
 
 
 def _lat_stack(lat: str, size: int) -> tuple[Image.Image, float]:
-    """Badge LAT (estilo logo Dolby): "LAT" en blanco del mismo tamaño que el texto inferior y debajo,
-    chico y espaciado, AUDIO (audio latino) o SUBS (solo subtitulos latinos). Devuelve la imagen y la
-    y del centro de las letras "LAT" (para alinearlas con el texto, no el bloque entero)."""
+    """Badge LAT (estilo logo Dolby): "LAT" del mismo tamaño, letra y color que el texto inferior y
+    debajo, chico y espaciado, AUDIO (audio latino) o SUBS (solo subtitulos latinos). Devuelve la
+    imagen y la y del centro del bloque (LAT + AUDIO), que se alinea con el centro del texto."""
     f1 = _font(size * SS)
     f2 = _font(max(6, int(size * 0.36)) * SS)
     sub = " ".join("AUDIO" if lat == "audio" else "SUBS")
@@ -391,13 +391,14 @@ def _lat_stack(lat: str, size: int) -> tuple[Image.Image, float]:
     W = int(max(r1 - l1, r2 - l2)) + 2 * SS
     base1 = -t1                     # linea base de LAT (su tope queda en y=0)
     base2 = base1 + gap - t2         # tope de la linea chica justo debajo de LAT
-    H = int(base2 + b2) + 2 * SS
+    bottom = base2 + b2
+    H = int(bottom) + 2 * SS
     im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     dd = ImageDraw.Draw(im)
-    dd.text(((W - (r1 - l1)) / 2 - l1, base1), "LAT", font=f1, fill=(255, 255, 255, 255), anchor="ls")
-    dd.text(((W - (r2 - l2)) / 2 - l2, base2), sub, font=f2, fill=(255, 255, 255, 230), anchor="ls")
+    dd.text(((W - (r1 - l1)) / 2 - l1, base1), "LAT", font=f1, fill=LABEL_COLOR, anchor="ls")
+    dd.text(((W - (r2 - l2)) / 2 - l2, base2), sub, font=f2, fill=LABEL_COLOR, anchor="ls")
     out = im.resize((max(1, W // SS), max(1, H // SS)), Image.LANCZOS)
-    return out, (base1 + (t1 + b1) / 2) / SS
+    return out, bottom / 2 / SS
 
 
 def _draw_label(image: Image.Image, text: str, lat: str | None = None) -> int:
@@ -419,7 +420,7 @@ def _draw_label(image: Image.Image, text: str, lat: str | None = None) -> int:
     x = (w - total) / 2
     d.text((x - l, cy - (b - t) / 2 - t), text, font=font, fill=LABEL_COLOR)
     if badge:
-        # el centro de "LAT" a la altura del centro del texto (AUDIO/SUBS cuelga debajo)
+        # el centro del bloque LAT + AUDIO/SUBS a la altura del centro del texto
         image.alpha_composite(badge, (int(x + (r - l) + gap), int(round(cy - lat_cy))))
     return cy - (b - t) // 2
 
