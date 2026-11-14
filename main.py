@@ -567,7 +567,7 @@ from logo_quality import logos_usable, is_pre_release
 from tmdb import es_display_title, ensure_light_logo, fetch_fanart_background_url, composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
 from presets import get_preset, preset_names, preset_catalog
 from pill_layout import build_pill_poster, TOP_RANK as PILL_TOP_RANK
-from latbadge import fetch_lat, lat_text
+from latbadge import fetch_lat
 
 # ---------------------------------------------------------------------------
 # Persistent HTTP client
@@ -1417,8 +1417,8 @@ def build_poster(
             label=_pill_label,
             sash_text=translate_sash(_pill_sash[0], cfg.logo_language) if _pill_sash else None,
             tokens=_pill_tokens,
-            show_badges=bool(_pill_tokens) or bool(cfg.lat),
-            lat_text=lat_text(cfg.lat),
+            show_badges=bool(_pill_tokens),
+            lat=cfg.lat,
             logo=logo,
             fallback_title=fallback_title,
             rank_text=translate_sash(f"#{cfg.top_rank} Today", cfg.logo_language) if cfg.top_rank else None,

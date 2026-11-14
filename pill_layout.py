@@ -237,14 +237,7 @@ def _res_item(tokens: list[str], w: int, scale: float) -> Image.Image | None:
     return _text_badge(_cfg.QUALITY_LABELS.get(res, res), int(w * BADGE_H * scale), int(w * BADGE_FONT * scale))
 
 
-def _lat_item(lat_text: str | None, w: int, scale: float) -> Image.Image | None:
-    if not lat_text:
-        return None
-    return _text_badge(lat_text, int(w * BADGE_H * scale), int(w * BADGE_FONT * scale))
-
-
-def _draw_badges(image: Image.Image, tokens: list[str], center_y: int, sash_text: str | None,
-                 lat_text: str | None = None) -> int:
+def _draw_badges(image: Image.Image, tokens: list[str], center_y: int, sash_text: str | None) -> int:
     """Badges arriba. Sin pastilla: logo Dolby + resolucion centrados y algo mas grandes.
     Con pastilla: en la misma fila, pegados a la derecha; si el texto de la pastilla no entra
     ni con la fuente minima, el logo Dolby se achica un poco.
@@ -252,8 +245,7 @@ def _draw_badges(image: Image.Image, tokens: list[str], center_y: int, sash_text
     w, _ = image.size
     free = w - int(w * MARGIN) + int(w * ITEM_GAP)
     if not sash_text:
-        items = [i for i in (_dolby_item(tokens, w, CENTER_SCALE), _res_item(tokens, w, CENTER_SCALE),
-                             _lat_item(lat_text, w, CENTER_SCALE)) if i]
+        items = [i for i in (_dolby_item(tokens, w, CENTER_SCALE), _res_item(tokens, w, CENTER_SCALE)) if i]
         gap = int(w * BADGE_GAP * 1.6)
         x = (w - (sum(i.width for i in items) + gap * (len(items) - 1))) // 2
         for it in items:
@@ -263,15 +255,14 @@ def _draw_badges(image: Image.Image, tokens: list[str], center_y: int, sash_text
     right = w - int(w * MARGIN)
     gap = int(w * BADGE_GAP)
     res = _res_item(tokens, w, 1.0)
-    lat = _lat_item(lat_text, w, 1.0)
     dolby = None
     for scale in (1.0, 0.8):
         dolby = _dolby_item(tokens, w, scale)
-        row = [i for i in (dolby, res, lat) if i]
+        row = [i for i in (dolby, res) if i]
         row_w = sum(i.width for i in row) + gap * (len(row) - 1)
         if _pill_fits_one_line(sash_text, right - row_w, w):
             break
-    row = [i for i in (dolby, res, lat) if i]
+    row = [i for i in (dolby, res) if i]
     if not row:
         return free
     row_w = sum(i.width for i in row) + gap * (len(row) - 1)
@@ -383,18 +374,53 @@ def _draw_rank_tab(image: Image.Image, text: str) -> None:
     image.alpha_composite(tab, ((w - pw) // 2, 0))
 
 
-def _draw_label(image: Image.Image, text: str) -> int:
-    """Texto inferior centrado. Devuelve la y superior que ocupa (para no pisarlo con el logo)."""
+LAT_GAP = 0.030   # separacion "Genero • ★ nota" <-> badge LAT
+
+
+def _lat_stack(lat: str, size: int) -> tuple[Image.Image, float]:
+    """Badge LAT (estilo logo Dolby): "LAT" en blanco del mismo tamaño que el texto inferior y debajo,
+    chico y espaciado, AUDIO (audio latino) o SUBS (solo subtitulos latinos). Devuelve la imagen y la
+    y del centro de las letras "LAT" (para alinearlas con el texto, no el bloque entero)."""
+    f1 = _font(size * SS)
+    f2 = _font(max(6, int(size * 0.36)) * SS)
+    sub = " ".join("AUDIO" if lat == "audio" else "SUBS")
+    d = ImageDraw.Draw(Image.new("L", (1, 1)))
+    l1, t1, r1, b1 = d.textbbox((0, 0), "LAT", font=f1, anchor="ls")
+    l2, t2, r2, b2 = d.textbbox((0, 0), sub, font=f2, anchor="ls")
+    gap = size * 0.16 * SS
+    W = int(max(r1 - l1, r2 - l2)) + 2 * SS
+    base1 = -t1                     # linea base de LAT (su tope queda en y=0)
+    base2 = base1 + gap - t2         # tope de la linea chica justo debajo de LAT
+    H = int(base2 + b2) + 2 * SS
+    im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    dd = ImageDraw.Draw(im)
+    dd.text(((W - (r1 - l1)) / 2 - l1, base1), "LAT", font=f1, fill=(255, 255, 255, 255), anchor="ls")
+    dd.text(((W - (r2 - l2)) / 2 - l2, base2), sub, font=f2, fill=(255, 255, 255, 230), anchor="ls")
+    out = im.resize((max(1, W // SS), max(1, H // SS)), Image.LANCZOS)
+    return out, (base1 + (t1 + b1) / 2) / SS
+
+
+def _draw_label(image: Image.Image, text: str, lat: str | None = None) -> int:
+    """Texto inferior centrado (con el badge LAT al lado si hay). Devuelve la y superior que ocupa
+    (para no pisarlo con el logo)."""
     w, h = image.size
     d = ImageDraw.Draw(image)
     size = int(w * LABEL_FONT)
-    font = _font(size)
-    while d.textlength(text, font=font) > w * 0.86 and size > 10:
-        size -= 1
+    gap = int(w * LAT_GAP)
+    while True:
         font = _font(size)
+        badge, lat_cy = _lat_stack(lat, size) if lat else (None, 0)
+        total = d.textlength(text, font=font) + (gap + badge.width if badge else 0)
+        if total <= w * 0.86 or size <= 10:
+            break
+        size -= 1
     l, t, r, b = d.textbbox((0, 0), text, font=font)
     cy = int(h * LABEL_CY)
-    d.text(((w - (r - l)) / 2 - l, cy - (b - t) / 2 - t), text, font=font, fill=LABEL_COLOR)
+    x = (w - total) / 2
+    d.text((x - l, cy - (b - t) / 2 - t), text, font=font, fill=LABEL_COLOR)
+    if badge:
+        # el centro de "LAT" a la altura del centro del texto (AUDIO/SUBS cuelga debajo)
+        image.alpha_composite(badge, (int(x + (r - l) + gap), int(round(cy - lat_cy))))
     return cy - (b - t) // 2
 
 
@@ -439,12 +465,12 @@ def build_pill_poster(
     logo: Image.Image | None,
     fallback_title: str | None,
     rank_text: str | None = None,
-    lat_text: str | None = None,
+    lat: str | None = None,
 ) -> Image.Image:
     w, h = image.size
     image = _bottom_fade(image)
 
-    label_top = _draw_label(image, label)
+    label_top = _draw_label(image, label, None if rank_text else lat)
     gap = int(h * 0.025)
 
     if logo is not None:
@@ -465,8 +491,8 @@ def build_pill_poster(
 
     badge_cy = int(w * MARGIN) + int(w * PILL_H) // 2
     left_of_badges = w - int(w * MARGIN) + int(w * ITEM_GAP)
-    if show_badges and (tokens or lat_text):
-        left_of_badges = _draw_badges(image, tokens or [], badge_cy, sash_text, lat_text)
+    if show_badges and tokens:
+        left_of_badges = _draw_badges(image, tokens, badge_cy, sash_text)
     if sash_text:
         _draw_pill(image, sash_text, left_of_badges)
     return image
