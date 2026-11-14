@@ -11,7 +11,7 @@ import httpx
 LAT_STATUS_URL = os.environ.get("LAT_STATUS_URL", "http://bitmagnet-web:8097/internal/lat")
 _TTL_OK, _TTL_ERR = 3600.0, 600.0
 _cache: dict[tuple[str, str], tuple[float, str | None, list[str] | None, bool]] = {}
-_QUALITY_OK = {"4K", "1080P", "DV", "HDR10+", "HDR10", "ATMOS", "TRUEHD", "DDP"}
+_QUALITY_OK = {"4K", "1080P", "DV", "HDR10+", "HDR10", "ATMOS", "TRUEHD", "DDP", "REMUX", "DTS-HD", "DTSX", "DTS", "5.1", "7.1"}
 
 
 async def fetch_lat(client: httpx.AsyncClient, media_type: str, tmdb_id: str) -> tuple[str | None, list[str] | None, bool]:

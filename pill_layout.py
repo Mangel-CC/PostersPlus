@@ -245,7 +245,7 @@ def _draw_badges(image: Image.Image, tokens: list[str], center_y: int, sash_text
     w, _ = image.size
     free = w - int(w * MARGIN) + int(w * ITEM_GAP)
     if not sash_text:
-        items = [i for i in (_dolby_item(tokens, w, CENTER_SCALE), _res_item(tokens, w, CENTER_SCALE)) if i]
+        items = [i for i in (_res_item(tokens, w, CENTER_SCALE),) if i]
         gap = int(w * BADGE_GAP * 1.6)
         x = (w - (sum(i.width for i in items) + gap * (len(items) - 1))) // 2
         for it in items:
@@ -255,14 +255,7 @@ def _draw_badges(image: Image.Image, tokens: list[str], center_y: int, sash_text
     right = w - int(w * MARGIN)
     gap = int(w * BADGE_GAP)
     res = _res_item(tokens, w, 1.0)
-    dolby = None
-    for scale in (1.0, 0.8):
-        dolby = _dolby_item(tokens, w, scale)
-        row = [i for i in (dolby, res) if i]
-        row_w = sum(i.width for i in row) + gap * (len(row) - 1)
-        if _pill_fits_one_line(sash_text, right - row_w, w):
-            break
-    row = [i for i in (dolby, res) if i]
+    row = [i for i in (res,) if i]
     if not row:
         return free
     row_w = sum(i.width for i in row) + gap * (len(row) - 1)
@@ -375,6 +368,96 @@ def _draw_rank_tab(image: Image.Image, text: str) -> None:
 
 
 LAT_GAP = 0.030   # separacion "Genero • ★ nota" <-> badge LAT
+
+# ---- Pie: Dolby + etiquetas tecnicas en texto gris, como "Genero • nota" (estilo B) ----
+FOOT_H   = 0.051   # alto de la linea del pie (fraccion del ancho)
+FOOT_CY  = 0.963   # centro vertical del pie (fraccion del alto)
+_FOOT_LABELS = (("HDR10+", "HDR10+"), ("HDR10", "HDR10"), ("REMUX", "REMUX"), ("DTSX", "DTS:X"), ("DTS-HD", "DTS-HD"),
+                ("DTS", "DTS"), ("7.1", "7.1"), ("5.1", "5.1"))
+
+
+def _dolby_flat(sub: str, height: int, color) -> Image.Image:
+    """Logo de Dolby plano (sin sombra), letra gruesa y del color del texto inferior."""
+    H = height * SS
+    top_h = int(H * 0.56)
+    f_dolby = _font(int(top_h * 1.05), _BOLD)
+    f_sub = _font(int(H * 0.30), _BOLD)
+    track = int(H * 0.085)
+    tmp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    sub_w = sum(tmp.textlength(c, font=f_sub) for c in sub) + track * (len(sub) - 1)
+    l, t, r, b = tmp.textbbox((0, 0), "Dolby", font=f_dolby)
+    sym_h = int(top_h * 0.86)
+    sym_w = int(sym_h * 1.32)
+    gap = int(top_h * 0.22)
+    top_w = sym_w + gap + (r - l)
+    W = int(max(top_w, sub_w)) + 2
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    x0 = (W - top_w) // 2
+    y0 = (top_h - sym_h) // 2
+    half = sym_w // 2 - max(1, sym_w // 22)
+    d.rectangle((x0, y0, x0 + half // 2, y0 + sym_h), fill=color)
+    d.pieslice((x0, y0, x0 + half, y0 + sym_h), -90, 90, fill=color)
+    x1 = x0 + sym_w - half
+    d.rectangle((x1 + half // 2, y0, x1 + half, y0 + sym_h), fill=color)
+    d.pieslice((x1, y0, x1 + half, y0 + sym_h), 90, 270, fill=color)
+    d.text((x0 + sym_w + gap - l, (top_h - (b - t)) // 2 - t), "Dolby", font=f_dolby, fill=color)
+    sl, st, sr, sb = tmp.textbbox((0, 0), sub, font=f_sub)
+    x = (W - sub_w) / 2
+    y = top_h + (H - top_h - (sb - st)) // 2 - st
+    for c in sub:
+        d.text((x, y), c, font=f_sub, fill=color)
+        x += tmp.textlength(c, font=f_sub) + track
+    return img.resize((max(1, W // SS), height), Image.LANCZOS)
+
+
+def _foot_text(text: str, h: int) -> Image.Image:
+    f = _font(int(h * 0.62) * SS, _BOLD)
+    d = ImageDraw.Draw(Image.new("L", (1, 1)))
+    l, t, r, b = d.textbbox((0, 0), text, font=f, anchor="ls")
+    W, H = int(r - l) + 2 * SS, h * SS
+    im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(im).text((-l + SS, (H + (b - t)) / 2 - b), text, font=f, fill=LABEL_COLOR, anchor="ls")
+    return im.resize((max(1, W // SS), h), Image.LANCZOS)
+
+
+def _draw_footer(image: Image.Image, tokens: list[str]) -> None:
+    """Pie centrado: logo de Dolby (si hay) · HDR10 · REMUX · DTS-HD · 5.1 (solo lo que haya)."""
+    w, h = image.size
+    fh = max(8, int(w * FOOT_H))
+    items = []
+    line = _dolby_line(tokens)
+    if line:
+        items.append(_dolby_flat(line, int(fh * 1.05), LABEL_COLOR))
+    seen = set()
+    for tok, label in _FOOT_LABELS:
+        if tok in tokens and label not in seen:
+            if tok == "HDR10" and "HDR10+" in tokens:
+                continue
+            if tok == "DTS" and ("DTS-HD" in tokens or "DTSX" in tokens):
+                continue
+            seen.add(label)
+            items.append(_foot_text(label, fh))
+    if not items:
+        return
+    sep = _foot_text("·", fh)
+    row = []
+    for i, it in enumerate(items):
+        if i:
+            row.append(sep)
+        row.append(it)
+    gap = max(1, int(w * BADGE_GAP * 0.5))
+    while True:
+        total = sum(i.width for i in row) + gap * (len(row) - 1)
+        if total <= w * 0.90 or len(items) <= 1:
+            break
+        items.pop()                      # si no cabe, se quita lo menos importante (canales, luego DTS...)
+        row = row[:-2]
+    x = (w - total) // 2
+    cy = int(h * FOOT_CY)
+    for it in row:
+        image.alpha_composite(it, (int(x), cy - it.height // 2))
+        x += it.width + gap
 
 
 def _lat_stack(lat: str, size: int) -> tuple[Image.Image, float]:
@@ -494,6 +577,7 @@ def build_pill_poster(
     left_of_badges = w - int(w * MARGIN) + int(w * ITEM_GAP)
     if show_badges and tokens:
         left_of_badges = _draw_badges(image, tokens, badge_cy, sash_text)
+        _draw_footer(image, tokens)
     if sash_text:
         _draw_pill(image, sash_text, left_of_badges)
     return image

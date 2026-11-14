@@ -2197,7 +2197,7 @@ _configurator_html: str | None = None
 # which is what made sliders / dropdowns drift out of sync with the new
 # defaults until a manual Reset.
 _configurator_etag: str | None = None
-_RENDER_CACHE_VERSION = "5"
+_RENDER_CACHE_VERSION = "6"
 _render_assets_signature = "startup"
 
 
