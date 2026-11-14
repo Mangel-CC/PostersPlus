@@ -370,8 +370,9 @@ def _draw_rank_tab(image: Image.Image, text: str) -> None:
 LAT_GAP = 0.030   # separacion "Genero • ★ nota" <-> badge LAT
 
 # ---- Pie: Dolby + etiquetas tecnicas en texto gris, como "Genero • nota" (estilo B) ----
-FOOT_H   = 0.051   # alto de la linea del pie (fraccion del ancho)
-FOOT_CY  = 0.963   # centro vertical del pie (fraccion del alto)
+FOOT_H   = 0.092   # alto de la linea del pie (fraccion del ancho)
+FOOT_CY  = 0.958   # centro vertical del pie (fraccion del alto)
+FOOT_LIFT = 0.034  # con pie, "Genero • nota" y el logo suben esto (fraccion del alto)
 _FOOT_LABELS = (("HDR10+", "HDR10+"), ("HDR10", "HDR10"), ("REMUX", "REMUX"), ("DTSX", "DTS:X"), ("DTS-HD", "DTS-HD"),
                 ("DTS", "DTS"), ("7.1", "7.1"), ("5.1", "5.1"))
 
@@ -484,7 +485,11 @@ def _lat_stack(lat: str, size: int) -> tuple[Image.Image, float]:
     return out, bottom / 2 / SS
 
 
-def _draw_label(image: Image.Image, text: str, lat: str | None = None) -> int:
+def _footer_tokens(tokens: list[str]) -> bool:
+    return bool(_dolby_line(tokens)) or any(t in tokens for t, _ in _FOOT_LABELS)
+
+
+def _draw_label(image: Image.Image, text: str, lat: str | None = None, lift: float = 0.0) -> int:
     """Texto inferior centrado (con el badge LAT al lado si hay). Devuelve la y superior que ocupa
     (para no pisarlo con el logo)."""
     w, h = image.size
@@ -499,7 +504,7 @@ def _draw_label(image: Image.Image, text: str, lat: str | None = None) -> int:
             break
         size -= 1
     l, t, r, b = d.textbbox((0, 0), text, font=font)
-    cy = int(h * LABEL_CY)
+    cy = int(h * (LABEL_CY - lift))
     x = (w - total) / 2
     d.text((x - l, cy - (b - t) / 2 - t), text, font=font, fill=LABEL_COLOR)
     if badge:
@@ -554,15 +559,17 @@ def build_pill_poster(
     w, h = image.size
     image = _bottom_fade(image)
 
-    label_top = _draw_label(image, label, None if rank_text else lat)
+    lift = FOOT_LIFT if (show_badges and tokens and not rank_text and _footer_tokens(tokens)) else 0.0
+    label_top = _draw_label(image, label, None if rank_text else lat, lift)
     gap = int(h * 0.025)
 
     if logo is not None:
         # composite_logo centra el logo en logo_centre_y(); se elige bottom_ratio para que ese
         # centro quede en LOGO_CY y la altura maxima no llegue al texto inferior.
-        max_h_ratio = min(LOGO_MAX_H, (label_top - gap - h * (LOGO_CY - LOGO_MAX_H / 2)) / h)
+        logo_cy = LOGO_CY - lift
+        max_h_ratio = min(LOGO_MAX_H, (label_top - gap - h * (logo_cy - LOGO_MAX_H / 2)) / h)
         g_max_h = min(int(h * _cfg.LOGO_MAX_H_RATIO), LOGO_ABS_MAX_H)
-        bottom_ratio = (h - h * LOGO_CY - g_max_h / 2) / h
+        bottom_ratio = (h - h * logo_cy - g_max_h / 2) / h
         composite_logo(image, logo, max_w_ratio=LOGO_MAX_W, max_h_ratio=max(0.08, max_h_ratio),
                        bottom_ratio=bottom_ratio)
     elif fallback_title:
