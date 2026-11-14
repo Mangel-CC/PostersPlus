@@ -26,7 +26,7 @@ async def fetch_lat(client: httpx.AsyncClient, media_type: str, tmdb_id: str) ->
     if hit and hit[0] > now:
         return hit[1], hit[2], hit[3]
     try:
-        r = await client.get(LAT_STATUS_URL, params={"type": kind, "tmdb": str(tmdb_id)}, timeout=2.0)
+        r = await client.get(LAT_STATUS_URL, params={"type": kind, "tmdb": str(tmdb_id)}, timeout=4.0)
         r.raise_for_status()
         data = r.json()
         val = data.get("lat") if data.get("lat") in ("audio", "subs") else None

@@ -804,6 +804,7 @@ class RequestConfig:
     layout: str = "default"               # "default" | "pill" (ver pill_layout.py)
     top_rank: int = 0                     # layout pill: puesto en un catalogo Top (pestaña "#N Hoy")
     lat: str | None = None                # layout pill: "audio" | "subs" (badge LAT, ver latbadge.py)
+    lat_err: bool = False                 # el indexador no respondio: clave aparte, se regenera cuando vuelva
     lat_quality: list | None = None       # layout pill: calidad del mejor torrent con audio latino (manda sobre la normal)
     sash_badge_style:  str   = "frosted" # "silver" | "gold" | "frosted"
     sash_badge_size_w: float = 1.05      # horizontal scale of badge
@@ -2956,12 +2957,13 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
     raw_params = dict(preset_params)
     rcfg = build_request_config(raw_params)
     if rcfg.layout == "pill" and str(raw_params.get("lat", "1")) != "0":
-        rcfg.lat, rcfg.lat_quality, _ = await fetch_lat(client, type, tmdb_id)
+        rcfg.lat, rcfg.lat_quality, _ok = await fetch_lat(client, type, tmdb_id)
+        rcfg.lat_err = not _ok
 
     # Same key shape as /poster → a preset and an equivalent /poster render
     # share one composite.
     final_cache_key = _composite_cache_key(
-        imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb, lat=rcfg.lat, lat_quality=rcfg.lat_quality
+        imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb, lat=("err" if rcfg.lat_err else rcfg.lat), lat_quality=rcfg.lat_quality
     )
 
     def _preset_header(persisted: bool) -> dict:
@@ -3363,11 +3365,12 @@ async def get_poster(
     # Skipped when an explicit quality= override is supplied (one-off).
     # ------------------------------------------------------------------
     if rcfg.layout == "pill" and str(raw_params.get("lat", "1")) != "0" and _HTTP_CLIENT is not None:
-        rcfg.lat, rcfg.lat_quality, _ = await fetch_lat(_HTTP_CLIENT, type, tmdb_id)
+        rcfg.lat, rcfg.lat_quality, _ok = await fetch_lat(_HTTP_CLIENT, type, tmdb_id)
+        rcfg.lat_err = not _ok
     if not quality and not _cfg.DISABLE_COMPOSITE_CACHE:
         final_cache_key = _composite_cache_key(
             imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb,
-            season=season, episode=episode, lat=rcfg.lat, lat_quality=rcfg.lat_quality,
+            season=season, episode=episode, lat=("err" if rcfg.lat_err else rcfg.lat), lat_quality=rcfg.lat_quality,
         )
         if _force_refresh:
             logger.info(f"Force refresh (nocache) for {final_cache_key} — bypassing cache read")
