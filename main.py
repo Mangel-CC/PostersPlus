@@ -804,6 +804,7 @@ class RequestConfig:
     layout: str = "default"               # "default" | "pill" (ver pill_layout.py)
     top_rank: int = 0                     # layout pill: puesto en un catalogo Top (pestaña "#N Hoy")
     lat: str | None = None                # layout pill: "audio" | "subs" (badge LAT, ver latbadge.py)
+    lat_quality: list | None = None       # layout pill: calidad del mejor torrent con audio latino (manda sobre la normal)
     sash_badge_style:  str   = "frosted" # "silver" | "gold" | "frosted"
     sash_badge_size_w: float = 1.05      # horizontal scale of badge
     sash_badge_size_h: float = 1.05      # vertical scale of badge
@@ -1411,7 +1412,9 @@ def build_poster(
             _pill_label = f"{genre_label} • ★ {_score_txt}"
         else:
             _pill_label = genre_label
-        _pill_tokens = quality_tokens or []
+        # Calidad: la del mejor torrent con audio latino del indexador propio (por nombre), si hay;
+        # si no, la normal (AIOStreams/MDBList).
+        _pill_tokens = list(cfg.lat_quality) if cfg.lat_quality else (quality_tokens or [])
         return build_pill_poster(
             image,
             label=_pill_label,
@@ -2249,6 +2252,7 @@ def _composite_cache_key(
     season: int = 0,
     episode: int = 0,
     lat: str | None = None,
+    lat_quality: list | None = None,
 ) -> str:
     """Build the composite blobstore key. Shared by /poster and the /p preset
     route so an equivalent preset and /poster render share one composite — no
@@ -2274,6 +2278,7 @@ def _composite_cache_key(
     _episode_sig = f"|ep={season}:{episode}" if season and episode else ""
     # Badge LAT: solo entra en la clave si hay algo que dibujar (los demas posters no cambian de clave)
     _episode_sig += f"|lat={lat}" if lat else ""
+    _episode_sig += f"|latq={'+'.join(lat_quality)}" if lat_quality else ""
     _params_hash = hashlib.sha256(
         (
             "&".join(f"{k}={v}" for k, v in sorted(raw_params.items()))
@@ -2951,12 +2956,12 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
     raw_params = dict(preset_params)
     rcfg = build_request_config(raw_params)
     if rcfg.layout == "pill" and str(raw_params.get("lat", "1")) != "0":
-        rcfg.lat, _ = await fetch_lat(client, type, tmdb_id)
+        rcfg.lat, rcfg.lat_quality, _ = await fetch_lat(client, type, tmdb_id)
 
     # Same key shape as /poster → a preset and an equivalent /poster render
     # share one composite.
     final_cache_key = _composite_cache_key(
-        imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb, lat=rcfg.lat
+        imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb, lat=rcfg.lat, lat_quality=rcfg.lat_quality
     )
 
     def _preset_header(persisted: bool) -> dict:
@@ -3358,11 +3363,11 @@ async def get_poster(
     # Skipped when an explicit quality= override is supplied (one-off).
     # ------------------------------------------------------------------
     if rcfg.layout == "pill" and str(raw_params.get("lat", "1")) != "0" and _HTTP_CLIENT is not None:
-        rcfg.lat, _ = await fetch_lat(_HTTP_CLIENT, type, tmdb_id)
+        rcfg.lat, rcfg.lat_quality, _ = await fetch_lat(_HTTP_CLIENT, type, tmdb_id)
     if not quality and not _cfg.DISABLE_COMPOSITE_CACHE:
         final_cache_key = _composite_cache_key(
             imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb,
-            season=season, episode=episode, lat=rcfg.lat,
+            season=season, episode=episode, lat=rcfg.lat, lat_quality=rcfg.lat_quality,
         )
         if _force_refresh:
             logger.info(f"Force refresh (nocache) for {final_cache_key} — bypassing cache read")
