@@ -237,7 +237,14 @@ def _res_item(tokens: list[str], w: int, scale: float) -> Image.Image | None:
     return _text_badge(_cfg.QUALITY_LABELS.get(res, res), int(w * BADGE_H * scale), int(w * BADGE_FONT * scale))
 
 
-def _draw_badges(image: Image.Image, tokens: list[str], center_y: int, sash_text: str | None) -> int:
+def _lat_item(lat_text: str | None, w: int, scale: float) -> Image.Image | None:
+    if not lat_text:
+        return None
+    return _text_badge(lat_text, int(w * BADGE_H * scale), int(w * BADGE_FONT * scale))
+
+
+def _draw_badges(image: Image.Image, tokens: list[str], center_y: int, sash_text: str | None,
+                 lat_text: str | None = None) -> int:
     """Badges arriba. Sin pastilla: logo Dolby + resolucion centrados y algo mas grandes.
     Con pastilla: en la misma fila, pegados a la derecha; si el texto de la pastilla no entra
     ni con la fuente minima, el logo Dolby se achica un poco.
@@ -245,7 +252,8 @@ def _draw_badges(image: Image.Image, tokens: list[str], center_y: int, sash_text
     w, _ = image.size
     free = w - int(w * MARGIN) + int(w * ITEM_GAP)
     if not sash_text:
-        items = [i for i in (_dolby_item(tokens, w, CENTER_SCALE), _res_item(tokens, w, CENTER_SCALE)) if i]
+        items = [i for i in (_dolby_item(tokens, w, CENTER_SCALE), _res_item(tokens, w, CENTER_SCALE),
+                             _lat_item(lat_text, w, CENTER_SCALE)) if i]
         gap = int(w * BADGE_GAP * 1.6)
         x = (w - (sum(i.width for i in items) + gap * (len(items) - 1))) // 2
         for it in items:
@@ -255,14 +263,15 @@ def _draw_badges(image: Image.Image, tokens: list[str], center_y: int, sash_text
     right = w - int(w * MARGIN)
     gap = int(w * BADGE_GAP)
     res = _res_item(tokens, w, 1.0)
+    lat = _lat_item(lat_text, w, 1.0)
     dolby = None
     for scale in (1.0, 0.8):
         dolby = _dolby_item(tokens, w, scale)
-        row = [i for i in (dolby, res) if i]
+        row = [i for i in (dolby, res, lat) if i]
         row_w = sum(i.width for i in row) + gap * (len(row) - 1)
         if _pill_fits_one_line(sash_text, right - row_w, w):
             break
-    row = [i for i in (dolby, res) if i]
+    row = [i for i in (dolby, res, lat) if i]
     if not row:
         return free
     row_w = sum(i.width for i in row) + gap * (len(row) - 1)
@@ -430,6 +439,7 @@ def build_pill_poster(
     logo: Image.Image | None,
     fallback_title: str | None,
     rank_text: str | None = None,
+    lat_text: str | None = None,
 ) -> Image.Image:
     w, h = image.size
     image = _bottom_fade(image)
@@ -455,8 +465,8 @@ def build_pill_poster(
 
     badge_cy = int(w * MARGIN) + int(w * PILL_H) // 2
     left_of_badges = w - int(w * MARGIN) + int(w * ITEM_GAP)
-    if show_badges and tokens:
-        left_of_badges = _draw_badges(image, tokens, badge_cy, sash_text)
+    if show_badges and (tokens or lat_text):
+        left_of_badges = _draw_badges(image, tokens or [], badge_cy, sash_text, lat_text)
     if sash_text:
         _draw_pill(image, sash_text, left_of_badges)
     return image
