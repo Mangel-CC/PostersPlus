@@ -559,8 +559,9 @@ def build_pill_poster(
     w, h = image.size
     image = _bottom_fade(image)
 
-    lift = FOOT_LIFT if (show_badges and tokens and not rank_text and _footer_tokens(tokens)) else 0.0
-    label_top = _draw_label(image, label, None if rank_text else lat, lift)
+    # Los Top 25 (rank) tambien llevan LAT y el pie; arriba solo cambia la pastilla por la pestaña "#N Hoy".
+    lift = FOOT_LIFT if (show_badges and tokens and _footer_tokens(tokens)) else 0.0
+    label_top = _draw_label(image, label, lat, lift)
     gap = int(h * 0.025)
 
     if logo is not None:
@@ -578,6 +579,8 @@ def build_pill_poster(
     if rank_text:
         # Catalogo Top: solo la pestaña con el puesto, sin badges ni otra pastilla (como btttr).
         _draw_rank_tab(image, rank_text)
+        if show_badges and tokens:
+            _draw_footer(image, tokens)
         return image
 
     badge_cy = int(w * MARGIN) + int(w * PILL_H) // 2
