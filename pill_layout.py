@@ -461,6 +461,35 @@ def _draw_footer(image: Image.Image, tokens: list[str]) -> None:
         x += it.width + gap
 
 
+NEW_COLOR = (74, 222, 128, 255)   # verde de "NUEVO" (episodio doblado recien llegado)
+
+
+def _draw_dub_footer(image: Image.Image, dub: tuple) -> None:
+    """Pie de doblaje latino en curso (opcion B, 2026-11-16): reemplaza al pie tecnico mientras el doblaje va
+    incompleto. "DOBLAJE HASTA T2 · E5" en gris; si ese episodio doblado acaba de llegar (<= 3 dias):
+    "NUEVO" en verde + "DOBLAJE · T2 · E5"."""
+    s_, e_, new = dub
+    w, h = image.size
+    fh = max(8, int(w * FOOT_H))
+    if new:
+        parts = [(_foot_text("NUEVO", fh), True), (_foot_text(f"DOBLAJE · T{s_} · E{e_}", fh), False)]
+    else:
+        parts = [(_foot_text(f"DOBLAJE HASTA T{s_} · E{e_}", fh), False)]
+    items = []
+    for it, colored in parts:
+        if colored:
+            a = it.split()[3]
+            it = Image.merge("RGBA", tuple(Image.new("L", it.size, c) for c in NEW_COLOR[:3]) + (a,))
+        items.append(it)
+    gap = int(fh * 0.25)
+    total = sum(i.width for i in items) + gap * (len(items) - 1)
+    x = (w - total) // 2
+    cy = int(h * FOOT_CY)
+    for it in items:
+        image.alpha_composite(it, (int(x), cy - it.height // 2))
+        x += it.width + gap
+
+
 def _lat_stack(lat: str, size: int) -> tuple[Image.Image, float]:
     """Badge LAT (estilo logo Dolby): "LAT" del mismo tamaño, letra y color que el texto inferior y
     debajo, chico y espaciado, AUDIO (audio latino) o SUBS (solo subtitulos latinos). Devuelve la
@@ -555,12 +584,13 @@ def build_pill_poster(
     fallback_title: str | None,
     rank_text: str | None = None,
     lat: str | None = None,
+    dub: tuple | None = None,
 ) -> Image.Image:
     w, h = image.size
     image = _bottom_fade(image)
 
     # Los Top 25 (rank) tambien llevan LAT y el pie; arriba solo cambia la pastilla por la pestaña "#N Hoy".
-    lift = FOOT_LIFT if (show_badges and tokens and _footer_tokens(tokens)) else 0.0
+    lift = FOOT_LIFT if (dub or (show_badges and tokens and _footer_tokens(tokens))) else 0.0
     label_top = _draw_label(image, label, lat, lift)
     gap = int(h * 0.025)
 
@@ -579,7 +609,9 @@ def build_pill_poster(
     if rank_text:
         # Catalogo Top: solo la pestaña con el puesto, sin badges ni otra pastilla (como btttr).
         _draw_rank_tab(image, rank_text)
-        if show_badges and tokens:
+        if dub:
+            _draw_dub_footer(image, dub)
+        elif show_badges and tokens:
             _draw_footer(image, tokens)
         return image
 
@@ -587,7 +619,10 @@ def build_pill_poster(
     left_of_badges = w - int(w * MARGIN) + int(w * ITEM_GAP)
     if show_badges and tokens:
         left_of_badges = _draw_badges(image, tokens, badge_cy, sash_text)
-        _draw_footer(image, tokens)
+        if not dub:
+            _draw_footer(image, tokens)
+    if dub:
+        _draw_dub_footer(image, dub)
     if sash_text:
         _draw_pill(image, sash_text, left_of_badges)
     return image

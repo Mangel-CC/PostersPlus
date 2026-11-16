@@ -567,7 +567,7 @@ from logo_quality import logos_usable, is_pre_release
 from tmdb import es_display_title, ensure_light_logo, fetch_fanart_background_url, composite_logo, logo_centre_y, fetch_logo, image_language_order, fetch_poster_metadata, fetch_poster_image, fetch_backdrop_image, fetch_trending_rank, fetch_release_status, svg_logo_supported, tmdb_metadata_cache_key, _CROP_VERSION, resolve_imdb_to_tmdb
 from presets import get_preset, preset_names, preset_catalog
 from pill_layout import build_pill_poster, TOP_RANK as PILL_TOP_RANK
-from latbadge import fetch_lat
+from latbadge import fetch_lat, lat_dub
 
 # ---------------------------------------------------------------------------
 # Persistent HTTP client
@@ -806,6 +806,7 @@ class RequestConfig:
     lat: str | None = None                # layout pill: "audio" | "subs" (badge LAT, ver latbadge.py)
     lat_err: bool = False                 # el indexador no respondio: clave aparte, se regenera cuando vuelva
     lat_quality: list | None = None       # layout pill: calidad del mejor torrent con audio latino (manda sobre la normal)
+    lat_dub: tuple | None = None          # layout pill: doblaje latino en curso (temporada, episodio, nuevo)
     sash_badge_style:  str   = "frosted" # "silver" | "gold" | "frosted"
     sash_badge_size_w: float = 1.05      # horizontal scale of badge
     sash_badge_size_h: float = 1.05      # vertical scale of badge
@@ -1423,6 +1424,7 @@ def build_poster(
             tokens=_pill_tokens,
             show_badges=bool(_pill_tokens),
             lat=cfg.lat,
+            dub=cfg.lat_dub,
             logo=logo,
             fallback_title=fallback_title,
             rank_text=translate_sash(f"#{cfg.top_rank} Today", cfg.logo_language) if cfg.top_rank else None,
@@ -2197,7 +2199,7 @@ _configurator_html: str | None = None
 # which is what made sliders / dropdowns drift out of sync with the new
 # defaults until a manual Reset.
 _configurator_etag: str | None = None
-_RENDER_CACHE_VERSION = "8"
+_RENDER_CACHE_VERSION = "9"
 _render_assets_signature = "startup"
 
 
@@ -2254,6 +2256,7 @@ def _composite_cache_key(
     episode: int = 0,
     lat: str | None = None,
     lat_quality: list | None = None,
+    lat_dub: tuple | None = None,
 ) -> str:
     """Build the composite blobstore key. Shared by /poster and the /p preset
     route so an equivalent preset and /poster render share one composite — no
@@ -2280,6 +2283,7 @@ def _composite_cache_key(
     # Badge LAT: solo entra en la clave si hay algo que dibujar (los demas posters no cambian de clave)
     _episode_sig += f"|lat={lat}" if lat else ""
     _episode_sig += f"|latq={'+'.join(lat_quality)}" if lat_quality else ""
+    _episode_sig += f"|dub={lat_dub[0]}:{lat_dub[1]}:{int(lat_dub[2])}" if lat_dub else ""
     _params_hash = hashlib.sha256(
         (
             "&".join(f"{k}={v}" for k, v in sorted(raw_params.items()))
@@ -2976,11 +2980,13 @@ async def get_preset_poster(preset: str, type: str, imdb_id: str):
     if rcfg.layout == "pill" and str(raw_params.get("lat", "1")) != "0":
         rcfg.lat, rcfg.lat_quality, _ok = await fetch_lat(client, type, tmdb_id)
         rcfg.lat_err = not _ok
+        rcfg.lat_dub = lat_dub(type, tmdb_id)
 
     # Same key shape as /poster → a preset and an equivalent /poster render
     # share one composite.
     final_cache_key = _composite_cache_key(
-        imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb, lat=("err" if rcfg.lat_err else rcfg.lat), lat_quality=rcfg.lat_quality
+        imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb, lat=("err" if rcfg.lat_err else rcfg.lat), lat_quality=rcfg.lat_quality,
+        lat_dub=rcfg.lat_dub,
     )
 
     def _preset_header(persisted: bool) -> dict:
@@ -3384,10 +3390,11 @@ async def get_poster(
     if rcfg.layout == "pill" and str(raw_params.get("lat", "1")) != "0" and _HTTP_CLIENT is not None:
         rcfg.lat, rcfg.lat_quality, _ok = await fetch_lat(_HTTP_CLIENT, type, tmdb_id)
         rcfg.lat_err = not _ok
+        rcfg.lat_dub = lat_dub(type, tmdb_id)
     if not quality and not _cfg.DISABLE_COMPOSITE_CACHE:
         final_cache_key = _composite_cache_key(
             imdb_id, tmdb_id, type, raw_params, rcfg.fallback_to_imdb,
-            season=season, episode=episode, lat=("err" if rcfg.lat_err else rcfg.lat), lat_quality=rcfg.lat_quality,
+            season=season, episode=episode, lat=("err" if rcfg.lat_err else rcfg.lat), lat_quality=rcfg.lat_quality, lat_dub=rcfg.lat_dub,
         )
         if _force_refresh:
             logger.info(f"Force refresh (nocache) for {final_cache_key} — bypassing cache read")

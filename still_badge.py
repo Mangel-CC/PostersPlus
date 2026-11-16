@@ -57,12 +57,14 @@ def draw(raw: bytes, lat: str) -> bytes:
     w, h = im.size
     size = max(14, int(h * 0.11))
     badge, _ = pl._lat_stack(lat, size)
-    pad = int(h * 0.05)
+    # Nuvio recorta los costados de la tarjeta (~5-6 % por lado) y redondea esquinas: margen generoso
+    # (en la primera version quedaba "AT AUDIO", 2026-11-16)
+    px, py = int(w * 0.085), int(h * 0.09)
     glow = Image.new("RGBA", im.size, (0, 0, 0, 0))
-    ImageDraw.Draw(glow).rectangle([0, 0, pad * 2 + badge.width, pad * 2 + badge.height], fill=(0, 0, 0, 140))
-    glow = glow.filter(ImageFilter.GaussianBlur(max(2, int(h * 0.05))))
+    ImageDraw.Draw(glow).rectangle([0, 0, px + badge.width + int(h * 0.06), py + badge.height + int(h * 0.06)], fill=(0, 0, 0, 140))
+    glow = glow.filter(ImageFilter.GaussianBlur(max(2, int(h * 0.06))))
     im = Image.alpha_composite(im, glow)
-    im.alpha_composite(badge, (pad, pad))
+    im.alpha_composite(badge, (px, py))
     out = io.BytesIO()
     im.convert("RGB").save(out, "JPEG", quality=88, optimize=True)
     return out.getvalue()

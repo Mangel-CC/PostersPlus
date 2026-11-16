@@ -11,6 +11,7 @@ import httpx
 LAT_STATUS_URL = os.environ.get("LAT_STATUS_URL", "http://bitmagnet-web:8097/internal/lat")
 _TTL_OK, _TTL_ERR = 3600.0, 600.0
 _cache: dict[tuple[str, str], tuple[float, str | None, list[str] | None, bool]] = {}
+_dub: dict[tuple[str, str], tuple | None] = {}   # doblaje en curso: (temporada, episodio, nuevo)
 _QUALITY_OK = {"4K", "1080P", "DV", "HDR10+", "HDR10", "ATMOS", "TRUEHD", "DDP", "REMUX", "DTS-HD", "DTSX", "DTS", "5.1", "7.1"}
 
 
@@ -31,9 +32,16 @@ async def fetch_lat(client: httpx.AsyncClient, media_type: str, tmdb_id: str) ->
         data = r.json()
         val = data.get("lat") if data.get("lat") in ("audio", "subs") else None
         q = [t for t in (data.get("quality") or []) if t in _QUALITY_OK] or None
+        d = data.get("dub") or None
+        _dub[key] = (int(d["s"]), int(d["e"]), bool(d.get("nuevo"))) if d and val == "audio" else None
         _cache[key] = (now + _TTL_OK, val, q, True)
         return val, q, True
     except Exception:
         _cache[key] = (now + _TTL_ERR, None, None, False)
         return None, None, False
 
+
+
+def lat_dub(media_type: str, tmdb_id: str) -> tuple | None:
+    """Doblaje latino en curso del ultimo fetch_lat de ese titulo: (temporada, episodio, nuevo) o None."""
+    return _dub.get(("movie" if media_type == "movie" else "tv", str(tmdb_id)))
