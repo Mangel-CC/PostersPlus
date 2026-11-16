@@ -490,7 +490,58 @@ def _draw_dub_footer(image: Image.Image, dub: tuple) -> None:
         x += it.width + gap
 
 
-def _lat_stack(lat: str, size: int) -> tuple[Image.Image, float]:
+# ---------- Escudo de verificado (estilo "verified user" de Material, relleno con la palomita calada) ----------
+def _cubic(p0, p1, p2, p3, n=24):
+    out = []
+    for i in range(1, n + 1):
+        t = i / n; mt = 1 - t
+        out.append((mt**3*p0[0] + 3*mt*mt*t*p1[0] + 3*mt*t*t*p2[0] + t**3*p3[0], mt**3*p0[1] + 3*mt*mt*t*p1[1] + 3*mt*t*t*p2[1] + t**3*p3[1]))
+    return out
+
+
+def _shield_path():
+    # contorno redondeado (viewBox 24x24, trazado del icono shield-check de Lucide)
+    pts = [(20, 13)]
+    pts += _cubic((20, 13), (20, 18), (16.5, 20.5), (12.34, 21.95))
+    pts += [(12.0, 22.0), (11.67, 21.94)]
+    pts += _cubic((11.67, 21.94), (7.5, 20.5), (4, 18), (4, 13))
+    pts += [(4, 6)]
+    pts += _cubic((4, 6), (4, 5.45), (4.45, 5), (5, 5), 8)
+    pts += _cubic((5, 5), (7, 5), (9.5, 3.8), (11.24, 2.28))
+    pts += _cubic((11.24, 2.28), (11.7, 1.9), (12.3, 1.9), (12.76, 2.28), 8)
+    pts += _cubic((12.76, 2.28), (14.51, 3.81), (17, 5), (19, 5))
+    pts += _cubic((19, 5), (19.55, 5), (20, 5.45), (20, 6), 8)
+    return pts
+
+
+def _shield(height: int, color=LABEL_COLOR) -> Image.Image:
+    """Escudo relleno con la palomita calada (transparente), de alto `height`."""
+    from PIL import ImageChops
+    S = 6; side = max(8, height) * S; sc = side / 24.0
+    im = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    ImageDraw.Draw(im).polygon([(x * sc, y * sc) for x, y in _shield_path()], fill=color)
+    mask = Image.new("L", im.size, 0); md = ImageDraw.Draw(mask)
+    chk = [(9 * sc, 12 * sc), (11 * sc, 14 * sc), (15 * sc, 10 * sc)]
+    lw = max(S, int(2.1 * sc))
+    md.line(chk, fill=255, width=lw, joint="curve")
+    for p in (chk[0], chk[-1]):
+        md.ellipse([p[0] - lw / 2, p[1] - lw / 2, p[0] + lw / 2, p[1] + lw / 2], fill=255)
+    im.putalpha(ImageChops.subtract(im.split()[3], mask))
+    im = im.crop(im.getbbox())
+    return im.resize((max(1, im.width * height // im.height), height), Image.LANCZOS)
+
+
+def _with_shield(stack: Image.Image, size: int) -> Image.Image:
+    """Bloque LAT + escudo a la derecha (alto ~ el del bloque)."""
+    sh = _shield(int(stack.height * 0.92))
+    gap = int(size * 0.2)
+    out = Image.new("RGBA", (stack.width + gap + sh.width, max(stack.height, sh.height)), (0, 0, 0, 0))
+    out.alpha_composite(stack, (0, 0))
+    out.alpha_composite(sh, (stack.width + gap, (stack.height - sh.height) // 2))
+    return out
+
+
+def _lat_stack(lat: str, size: int, ver: bool = False) -> tuple[Image.Image, float]:
     """Badge LAT (estilo logo Dolby): "LAT" del mismo tamaño, letra y color que el texto inferior y
     debajo, chico y espaciado, AUDIO (audio latino) o SUBS (solo subtitulos latinos). Devuelve la
     imagen y la y del centro del bloque (LAT + AUDIO), que se alinea con el centro del texto."""
@@ -511,6 +562,8 @@ def _lat_stack(lat: str, size: int) -> tuple[Image.Image, float]:
     dd.text(((W - (r1 - l1)) / 2 - l1, base1), "LAT", font=f1, fill=LABEL_COLOR, anchor="ls")
     dd.text(((W - (r2 - l2)) / 2 - l2, base2), sub, font=f2, fill=LABEL_COLOR, anchor="ls")
     out = im.resize((max(1, W // SS), max(1, H // SS)), Image.LANCZOS)
+    if ver:
+        out = _with_shield(out, size)
     return out, bottom / 2 / SS
 
 
@@ -518,7 +571,7 @@ def _footer_tokens(tokens: list[str]) -> bool:
     return bool(_dolby_line(tokens)) or any(t in tokens for t, _ in _FOOT_LABELS)
 
 
-def _draw_label(image: Image.Image, text: str, lat: str | None = None, lift: float = 0.0) -> int:
+def _draw_label(image: Image.Image, text: str, lat: str | None = None, lift: float = 0.0, ver: bool = False) -> int:
     """Texto inferior centrado (con el badge LAT al lado si hay). Devuelve la y superior que ocupa
     (para no pisarlo con el logo)."""
     w, h = image.size
@@ -527,7 +580,7 @@ def _draw_label(image: Image.Image, text: str, lat: str | None = None, lift: flo
     gap = int(w * LAT_GAP)
     while True:
         font = _font(size)
-        badge, lat_cy = _lat_stack(lat, size) if lat else (None, 0)
+        badge, lat_cy = _lat_stack(lat, size, ver) if lat else (None, 0)
         total = d.textlength(text, font=font) + (gap + badge.width if badge else 0)
         if total <= w * 0.86 or size <= 10:
             break
@@ -585,13 +638,14 @@ def build_pill_poster(
     rank_text: str | None = None,
     lat: str | None = None,
     dub: tuple | None = None,
+    ver: bool = False,
 ) -> Image.Image:
     w, h = image.size
     image = _bottom_fade(image)
 
     # Los Top 25 (rank) tambien llevan LAT y el pie; arriba solo cambia la pastilla por la pestaña "#N Hoy".
     lift = FOOT_LIFT if (dub or (show_badges and tokens and _footer_tokens(tokens))) else 0.0
-    label_top = _draw_label(image, label, lat, lift)
+    label_top = _draw_label(image, label, lat, lift, ver)
     gap = int(h * 0.025)
 
     if logo is not None:
