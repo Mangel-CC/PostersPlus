@@ -2859,6 +2859,23 @@ async def get_logo(
                     media_type="image/png", headers=_ARTWORK_TEXT_CACHE_HEADERS)
 
 
+@app.get("/still")
+async def get_still(src: str, tmdb: str = "", s: int = 0, e: int = 0, v: str = ""):
+    """Imagen de capitulo con badge LAT (ver still_badge.py). Sin latino: redirige a la original."""
+    import still_badge
+    if not still_badge.allowed(src):
+        raise HTTPException(status_code=400, detail="src no permitido")
+    client = _HTTP_CLIENT or _make_http_client()
+    lat = await still_badge.fetch_lat_ep(client, tmdb, s, e) if tmdb.isdigit() and s >= 0 and e > 0 else None
+    if not lat:
+        return Response(status_code=302, headers={"Location": src, "Cache-Control": "public, max-age=21600"})
+    try:
+        data = await still_badge.render(client, src, lat)
+    except Exception:
+        return Response(status_code=302, headers={"Location": src, "Cache-Control": "public, max-age=600"})
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=21600"})
+
+
 @app.get("/background")
 async def get_background(
     tmdb_id: str = "",
