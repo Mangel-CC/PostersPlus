@@ -3746,13 +3746,15 @@ async def get_poster(
         # poco representativo ("A Nobody's Way Up to an Exploration Hero"). Mejor el poster OFICIAL en ingles,
         # con su titulo y sin nuestro logo encima. ANIME_EN_POSTER=0 lo apaga.
         _is_anime_art = _original_lang == "ja" and 16 in (genre_ids or [])
-        if (not _use_original_art and _use_backdrop and _is_anime_art
+        _anime_en_poster = False
+        if (not _use_original_art and _is_anime_art and (_use_backdrop or not is_textless)
                 and os.environ.get("ANIME_EN_POSTER", "1") != "0"):
             _en_art = _plangs.get("en") or _p_default
             if _en_art:
                 poster_path   = _en_art
                 is_textless   = False
                 _use_backdrop = False
+                _anime_en_poster = True   # tambien sin el "rescate" de fondo con texto (Option A, abajo)
                 logger.info(f"Anime sin poster sin texto {tmdb_id} — poster oficial en ingles {poster_path}")
 
         if rating_already_cached or not effective_mdblist_key:
@@ -3808,7 +3810,7 @@ async def get_poster(
             _rescued = None
             _tbp = tmdb_data.get("text_backdrop_path")
             if (_cfg.TEXTLESS_TEXT_DETECTION and not is_textless and _tbp
-                    and not _use_original_art
+                    and not _use_original_art and not _anime_en_poster
                     and _detection_vote_ok(tmdb_data.get("vote_count"))):
                 try:
                     _cand = await fetch_backdrop_image(client, tmdb_id, _tbp, avoid_text=True)
