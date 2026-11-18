@@ -2201,7 +2201,7 @@ _configurator_html: str | None = None
 # which is what made sliders / dropdowns drift out of sync with the new
 # defaults until a manual Reset.
 _configurator_etag: str | None = None
-_RENDER_CACHE_VERSION = "9"
+_RENDER_CACHE_VERSION = "10"
 _render_assets_signature = "startup"
 
 
@@ -3741,6 +3741,19 @@ async def get_poster(
             _use_backdrop = False
             logger.info(f"Original-art mode for {tmdb_id} — poster {poster_path} "
                         f"(priority={rcfg.logo_priority})")
+
+        # Anime sin poster sin texto (pedido del usuario 2026-11-18): el recorte del fondo horizontal quedaba
+        # poco representativo ("A Nobody's Way Up to an Exploration Hero"). Mejor el poster OFICIAL en ingles,
+        # con su titulo y sin nuestro logo encima. ANIME_EN_POSTER=0 lo apaga.
+        _is_anime_art = _original_lang == "ja" and 16 in (genre_ids or [])
+        if (not _use_original_art and _use_backdrop and _is_anime_art
+                and os.environ.get("ANIME_EN_POSTER", "1") != "0"):
+            _en_art = _plangs.get("en") or _p_default
+            if _en_art:
+                poster_path   = _en_art
+                is_textless   = False
+                _use_backdrop = False
+                logger.info(f"Anime sin poster sin texto {tmdb_id} — poster oficial en ingles {poster_path}")
 
         if rating_already_cached or not effective_mdblist_key:
             rating_coro = _resolved(
