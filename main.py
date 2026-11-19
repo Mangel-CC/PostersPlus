@@ -2201,7 +2201,7 @@ _configurator_html: str | None = None
 # which is what made sliders / dropdowns drift out of sync with the new
 # defaults until a manual Reset.
 _configurator_etag: str | None = None
-_RENDER_CACHE_VERSION = "11"
+_RENDER_CACHE_VERSION = "12"
 _render_assets_signature = "startup"
 
 
@@ -3744,7 +3744,7 @@ async def get_poster(
 
         # Anime sin poster sin texto (pedido del usuario 2026-11-18): el recorte del fondo horizontal quedaba
         # poco representativo ("A Nobody's Way Up to an Exploration Hero"). Mejor el poster OFICIAL en ingles,
-        # con su titulo y sin nuestro logo encima. ANIME_EN_POSTER=0 lo apaga.
+        # con nuestro logo (ingles) encima de su titulo. ANIME_EN_POSTER=0 lo apaga.
         _is_anime_art = _original_lang == "ja" and 16 in (genre_ids or [])
         _anime_en_poster = False
         if (not _use_original_art and _is_anime_art and (_use_backdrop or not is_textless)
@@ -3927,7 +3927,7 @@ async def get_poster(
             trending_rank,
         ) = await asyncio.gather(
             _image_coro,
-            fetch_logo(client, logos, rcfg.logo_language, imdb_id=imdb_id, original_language=tmdb_data.get("original_language"), logo_priority=rcfg.logo_priority, language_order=_artwork_logo_order(tmdb_data, rcfg.logo_language), fanart_ctx={"media_type": type, "tmdb_id": tmdb_id, "tmdb_key": effective_tmdb_key, "languages": _artwork_logo_order(tmdb_data, rcfg.logo_language)}) if (is_textless and not is_no_poster) else _resolved(None),
+            fetch_logo(client, logos, rcfg.logo_language, imdb_id=imdb_id, original_language=tmdb_data.get("original_language"), logo_priority=rcfg.logo_priority, language_order=_artwork_logo_order(tmdb_data, rcfg.logo_language), fanart_ctx={"media_type": type, "tmdb_id": tmdb_id, "tmdb_key": effective_tmdb_key, "languages": _artwork_logo_order(tmdb_data, rcfg.logo_language)}) if ((is_textless or _anime_en_poster) and not is_no_poster) else _resolved(None),
             rating_coro,
             fetch_trending_rank(client, tmdb_id, effective_tmdb_key, type),
         )
@@ -4327,7 +4327,8 @@ async def get_poster(
         # Offload CPU-bound PIL compositing + JPEG encoding to the thread pool
         # so the event loop stays free for concurrent requests.
         _bp_args = dict(
-            logo=logo if (is_textless and not is_no_poster and not rcfg.textless
+            # anime con poster oficial en ingles: el logo encima tapa el titulo que trae el arte (pedido 2026-11-19)
+            logo=logo if ((is_textless or _anime_en_poster) and not is_no_poster and not rcfg.textless
                           and not _suppress_overlay) else None,
             fallback_title=(
                 title if is_no_poster
